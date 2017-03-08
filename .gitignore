@@ -1,1 +1,2 @@
-data.pyc inception.pyc model.pyc
+.*
+*.pyc

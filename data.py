@@ -19,10 +19,12 @@ FLAGS = tf.app.flags.FLAGS
 # ===========================
 #   Data Parameters
 # ===========================
-tf.app.flags.DEFINE_string("dataset", "sandbox","pick the dataset in data_root from which your movies can be found.")
+tf.app.flags.DEFINE_string("dataset", "esat","pick the dataset in data_root from which your movies can be found.")
 tf.app.flags.DEFINE_integer("batch_size", 16, "The size of the minibatch used for training.")
 tf.app.flags.DEFINE_string("data_root", "/home/klaas/pilot_data", "Define the root folder of the different datasets.")
 tf.app.flags.DEFINE_integer("num_threads", 1, "The number of threads for loading one minibatch.")
+tf.app.flags.DEFINE_float("mean", 0.2623, "Define the mean of the input data for centering around zero. default taken from esat data.")
+tf.app.flags.DEFINE_float("std", 0.1565, "Define the standard deviation of the data for normalization. default taken from esat data.")
 
 datasetdir = join(FLAGS.data_root, FLAGS.dataset)
 full_set = {}
@@ -61,7 +63,7 @@ def generate_batch(data_type):
   data_set=full_set[data_type]
   number_of_frames = sum([t[1] for t in data_set])
   # When there is that much data applied that you can get more than 100 minibatches out
-  # stick to 100, otherwise one epoch takes too long and the training is not update
+  # stick to 100, otherwise one epoch takes too long and the training is not updated
   # regularly enough.
   max_num_of_batch = {'train':100, 'val':10, 'test':1000}
   number_of_batches = min(int(number_of_frames/FLAGS.batch_size),max_num_of_batch[data_type])
@@ -118,6 +120,10 @@ def generate_batch(data_type):
             im = Image.open(img_file)
             im = sm.imresize(im,im_size,'nearest')
             im = im * 1/255.
+            # center the data around zero with 1standard devation
+            # with tool 'get_mean_variance.py' in tensorflow2/examples/tools
+            im -= FLAGS.mean
+            im = im*1/FLAGS.std
             im_b[loc_ind,:,:,:]=im
             #im_b[loc_ind]=im
             #im_b.append(im)
@@ -151,7 +157,7 @@ def generate_batch(data_type):
     if ok: b+=1
     yield ok, np.asarray(im_b), np.asarray(trgt_b)
     
-#### FOR TESTING ONLY: DELETE LATER
+#### FOR TESTING ONLY
 if __name__ == '__main__':
   def print_dur(start_time):
     duration = (time.time()-start_time)

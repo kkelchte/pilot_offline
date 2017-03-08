@@ -9,16 +9,16 @@ from tensorflow.python.ops import variables as tf_variables
 FLAGS = tf.app.flags.FLAGS
 
 # Weight decay of inception network
-tf.app.flags.DEFINE_float("weight_decay", 0.0004, "Weight decay of inception network")
+tf.app.flags.DEFINE_float("weight_decay", 0.00001, "Weight decay of inception network")
 # Std of uniform initialization
-tf.app.flags.DEFINE_float("init_scale", 0.01, "Std of uniform initialization")
+tf.app.flags.DEFINE_float("init_scale", 0.0027, "Std of uniform initialization")
 # Base learning rate
 tf.app.flags.DEFINE_float("learning_rate", 0.00001, "Start learning rate.")
 # Specify where the Model, trained on ImageNet, was saved.
 tf.app.flags.DEFINE_string("model_path", '/home/klaas/tensorflow2/models/inception_v3.ckpt', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # Define the initializer
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
-tf.app.flags.DEFINE_string("checkpoint_path", '/home/klaas/tensorflow2/log/2345-14-2-17/', "Specify the directory of the checkpoint of the earlier trained model.")
+tf.app.flags.DEFINE_string("checkpoint_path", '/home/klaas/tensorflow2/log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
 tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
 tf.app.flags.DEFINE_boolean("grad_mul", True, "Specify whether the weights of the final tanh activation should be learned faster.")
 
@@ -47,8 +47,19 @@ class Model(object):
     # build network from SLIM model
     self.define_network()
     if not FLAGS.continue_training:
+      checkpoint_path = FLAGS.model_path
       variables_to_restore = slim.get_variables_to_restore(exclude=["InceptionV3/Logits", "InceptionV3/AuxLogits"])
-      init_assign_op, init_feed_dict = slim.assign_from_checkpoint(FLAGS.model_path, variables_to_restore)
+      init_assign_op, init_feed_dict = slim.assign_from_checkpoint(checkpoint_path, variables_to_restore)
+    else:
+      variables_to_restore = slim.get_variables_to_restore()
+      if FLAGS.checkpoint_path[0]!='/':
+        checkpoint_path = '/home/klaas/tensorflow2/log/'+FLAGS.checkpoint_path
+      else:
+        checkpoint_path = FLAGS.checkpoint_path
+      init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
+    
+    # create saver for checkpoints
+    self.saver = tf.train.Saver()
     
     # Add the loss function to the graph.
     self.define_loss()
@@ -59,19 +70,10 @@ class Model(object):
     # Define summaries
     self.build_summaries()
     
-    # create saver for checkpoints
-    self.saver = tf.train.Saver()
-    
-    # initialize model from checkpoint
-    if not FLAGS.continue_training:
-      # Restore only the convolutional layers:
-      #with slim.arg_scope(inception.inception_v3_arg_scope()):
-      init_all=tf_variables.global_variables_initializer()
-      self.sess.run([init_all, init_assign_op], init_feed_dict)
-      print('Successfully loaded model from pretrained model.')
-    else:
-      self.saver.restore(self.sess, tf.train.latest_checkpoint(FLAGS.checkpoint_path))
-      print('Successfully loaded model from saved checkpoint.')
+    init_all=tf_variables.global_variables_initializer()
+    self.sess.run([init_all])
+    self.sess.run([init_assign_op], init_feed_dict)
+    print('Successfully loaded model from:', checkpoint_path)
     
   def define_network(self):
     '''build the network and set the tensors
@@ -122,7 +124,7 @@ class Model(object):
   def backward(self, inputs, targets):
     '''run forward pass and return action prediction
     '''
-    control, loss, _ = self.sess.run([self.outputs, self.loss, self.train_op], feed_dict={self.inputs: inputs, self.targets: targets})
+    control, loss, _ = self.sess.run([self.outputs, self.total_loss, self.train_op], feed_dict={self.inputs: inputs, self.targets: targets})
     
     return control, loss
   
