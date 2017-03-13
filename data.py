@@ -155,7 +155,7 @@ def generate_batch(data_type):
       else:
         if len(checklist) != sum(checklist): ok=False
     if ok: b+=1
-    yield ok, np.asarray(im_b), np.asarray(trgt_b)
+    yield b, ok, np.asarray(im_b), np.asarray(trgt_b)
     
 #### FOR TESTING ONLY
 if __name__ == '__main__':

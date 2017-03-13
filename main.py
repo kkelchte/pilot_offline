@@ -131,29 +131,34 @@ def main(_):
     train_loss=[]
     val_loss=[]
     # train episode
-    for ok, im_b, trgt_b in data.generate_batch('train'):
-      if ok:
-        try:
-          _, batch_loss = model.backward(im_b, trgt_b)
-        except Exception as e:
-          print('failed to train on this batch: ',e)
-        #print(batch_loss)
-        train_loss.append(batch_loss)
-    if len(train_loss)==0:
-      raise IOError('Training failed on all batches of this episode.')  
-    print('training : ',print_dur(start_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(train_loss), max(train_loss), min(train_loss)))
-    sys.stdout.flush()
-    val_time= time.time()
+    #for index, ok, im_b, trgt_b in data.generate_batch('train'):
+      #if ok:
+        #try:
+          #_, batch_loss = model.backward(im_b, trgt_b)
+        #except Exception as e:
+          #print('failed to train on this batch: ',e)
+        ##print(batch_loss)
+        #train_loss.append(batch_loss)
+    #if len(train_loss)==0:
+      #raise IOError('Training failed on all batches of this episode.')  
+    #print('training : ',print_dur(start_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(train_loss), max(train_loss), min(train_loss)))
+    #sys.stdout.flush()
+    train_loss=[1,2,3]
+    
     # evaluate on val set
-    for ok, im_b, trgt_b in data.generate_batch('val'):
+    val_time= time.time()
+    activation_images=[]
+    for index, ok, im_b, trgt_b in data.generate_batch('val'):
       if ok:
-         _, batch_loss = model.backward(im_b, trgt_b)
+        _, batch_loss = model.backward(im_b, trgt_b)
         val_loss.append(batch_loss)
+      if index == 1: 
+	activation_images = model.plot_activations(im_b)
     print('validation : ',print_dur(val_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(val_loss), max(val_loss), min(val_loss)))
     sys.stdout.flush()
     # write summary
     try:
-      sumvar=[np.mean(train_loss), np.mean(val_loss)]
+      sumvar=[np.mean(train_loss), np.mean(val_loss), activation_images]
       model.summarize(ep, sumvar)
     except Exception as e:
       print('failed to summarize', e)
