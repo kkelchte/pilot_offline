@@ -130,7 +130,8 @@ def main(_):
     print('start episode:', ep)
     train_loss=[]
     val_loss=[]
-    # train episode
+    #### TODO
+    ## train episode
     #for index, ok, im_b, trgt_b in data.generate_batch('train'):
       #if ok:
         #try:
@@ -143,17 +144,17 @@ def main(_):
       #raise IOError('Training failed on all batches of this episode.')  
     #print('training : ',print_dur(start_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(train_loss), max(train_loss), min(train_loss)))
     #sys.stdout.flush()
-    train_loss=[1,2,3]
+    train_loss=[1,2,3] #TODO
     
     # evaluate on val set
     val_time= time.time()
     activation_images=[]
     for index, ok, im_b, trgt_b in data.generate_batch('val'):
       if ok:
-        _, batch_loss = model.backward(im_b, trgt_b)
+        _, batch_loss = model.forward(im_b, trgt_b)
         val_loss.append(batch_loss)
       if index == 1: 
-	activation_images = model.plot_activations(im_b)
+        activation_images = model.plot_activations(im_b)
     print('validation : ',print_dur(val_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(val_loss), max(val_loss), min(val_loss)))
     sys.stdout.flush()
     # write summary
@@ -171,7 +172,7 @@ def main(_):
   test_loss=[]
   for ok, im_b, trgt_b in data.generate_batch('test'):
     if ok:
-      _, batch_loss = model.backward(im_b, trgt_b)
+      _, batch_loss = model.forward(im_b, trgt_b)
       test_loss.append(batch_loss)
   print('validation : ',print_dur(start_time),'loss: [avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(test_loss), max(test_loss), min(test_loss)))
     

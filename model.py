@@ -130,11 +130,14 @@ class Model(object):
         gradient_multipliers = {}
       self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, gradient_multipliers=gradient_multipliers)
         
-  def forward(self, inputs):
+  def forward(self, inputs, targets=None):
     '''run forward pass and return action prediction
     '''
-    return self.sess.run(self.outputs, feed_dict={self.inputs: inputs})
-  
+    if targets == None:
+      return self.sess.run(self.outputs, feed_dict={self.inputs: inputs})
+    else:
+      return self.sess.run([self.outputs, self.total_loss], feed_dict={self.inputs: inputs, self.targets: targets})
+    
   def backward(self, inputs, targets):
     '''run forward pass and return action prediction
     '''
