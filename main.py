@@ -128,21 +128,19 @@ def main(_):
     print('start episode:', ep)
     train_loss=[]
     val_loss=[]
-    #### TODO
-    ## train episode
-    #for index, ok, im_b, trgt_b in data.generate_batch('train'):
-      #if ok:
-        #try:
-          #_, batch_loss = model.backward(im_b, trgt_b)
-        #except Exception as e:
-          #print('failed to train on this batch: ',e)
-        ##print(batch_loss)
-        #train_loss.append(batch_loss)
-    #if len(train_loss)==0:
-      #raise IOError('Training failed on all batches of this episode.')  
-    #print('training : ',print_dur(start_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(train_loss), max(train_loss), min(train_loss)))
-    #sys.stdout.flush()
-    train_loss=[1,2,3] #TODO
+    # train episode
+    for index, ok, im_b, trgt_b in data.generate_batch('train'):
+      if ok:
+        try:
+          _, batch_loss = model.backward(im_b, trgt_b)
+        except Exception as e:
+          print('failed to train on this batch: ',e)
+        #print(batch_loss)
+        train_loss.append(batch_loss)
+    if len(train_loss)==0:
+      raise IOError('Training failed on all batches of this episode.')  
+    print('training : ',print_dur(start_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(train_loss), max(train_loss), min(train_loss)))
+    sys.stdout.flush()
     
     # evaluate on val set
     val_time= time.time()

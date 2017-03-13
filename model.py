@@ -142,7 +142,6 @@ class Model(object):
     '''run forward pass and return action prediction
     '''
     control, loss, _ = self.sess.run([self.outputs, self.total_loss, self.train_op], feed_dict={self.inputs: inputs, self.targets: targets})
-    
     return control, loss
   
   def fig2buf(self, fig):
@@ -203,7 +202,7 @@ class Model(object):
     tf.summary.scalar("loss_training", loss_training)
     loss_validation = tf.Variable(0.)
     tf.summary.scalar("loss_validation", loss_validation)
-    act_images = tf.placeholder(tf.float32, [None, 1200, 1200, 1])
+    act_images = tf.placeholder(tf.float32, [None, 1500, 1500, 1])
     tf.summary.image("conv_activations", act_images, max_outputs=4)
     self.summary_vars = [loss_training, loss_validation, act_images]
     self.summary_ops = tf.summary.merge_all()
