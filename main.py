@@ -166,7 +166,7 @@ def main(_):
   # Training finished, time to test:
   # evaluate on val set
   test_loss=[]
-  for ok, im_b, trgt_b in data.generate_batch('test'):
+  for index, ok, im_b, trgt_b in data.generate_batch('test'):
     if ok:
       _, batch_loss = model.forward(im_b, trgt_b)
       test_loss.append(batch_loss)
