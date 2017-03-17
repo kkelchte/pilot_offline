@@ -24,7 +24,7 @@ tf.app.flags.DEFINE_string("model_path", '/home/klaas/tensorflow2/models/incepti
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
 tf.app.flags.DEFINE_string("checkpoint_path", '/home/klaas/tensorflow2/log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
 tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
-tf.app.flags.DEFINE_boolean("grad_mul", True, "Specify whether the weights of the final tanh activation should be learned faster.")
+tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")
 
 """
@@ -50,6 +50,7 @@ class Model(object):
     # need to catch variables to restore before defining the training op
     # because adam variables are not available in check point.
     # build network from SLIM model
+    self.global_step = tf.Variable(0, name='global_step', trainable=False)
     self.define_network()
     if not FLAGS.continue_training:
       checkpoint_path = FLAGS.model_path
@@ -73,7 +74,7 @@ class Model(object):
       init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
     
     # create saver for checkpoints
-    self.saver = tf.train.Saver()
+    self.saver = tf.train.Saver(keep_checkpoint_every_n_hours=1, max_to_keep=5)
     
     # Add the loss function to the graph.
     self.define_loss()
@@ -128,7 +129,7 @@ class Model(object):
         }
       else:
         gradient_multipliers = {}
-      self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, gradient_multipliers=gradient_multipliers)
+      self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, gradient_multipliers=gradient_multipliers, global_step=self.global_step)
         
   def forward(self, inputs, targets=None):
     '''run forward pass and return action prediction
@@ -142,6 +143,7 @@ class Model(object):
     '''run forward pass and return action prediction
     '''
     control, loss, _ = self.sess.run([self.outputs, self.total_loss, self.train_op], feed_dict={self.inputs: inputs, self.targets: targets})
+    #self.global_step += 1
     return control, loss
   
   def fig2buf(self, fig):
@@ -193,9 +195,11 @@ class Model(object):
     
     return activation_images
     
-  def save(self, run, logfolder):
+  def save(self, logfolder):
     '''save a checkpoint'''
-    self.saver.save(self.sess, logfolder+'/my-model', global_step=run)
+    #self.saver.save(self.sess, logfolder+'/my-model', global_step=run)
+    self.saver.save(self.sess, logfolder+'/my-model', global_step=tf.train.global_step(self.sess, self.global_step))
+    #self.saver.save(self.sess, logfolder+'/my-model')
   
   def build_summaries(self): 
     loss_training = tf.Variable(0.)
@@ -207,12 +211,12 @@ class Model(object):
     self.summary_vars = [loss_training, loss_validation, act_images]
     self.summary_ops = tf.summary.merge_all()
 
-  def summarize(self, run, sumvars):
+  def summarize(self, sumvars):
     '''write summary vars with ops'''
     if self.writer:
       feed_dict={self.summary_vars[i]:sumvars[i] for i in range(len(sumvars))}
       summary_str = self.sess.run(self.summary_ops, feed_dict=feed_dict)
-      self.writer.add_summary(summary_str, run)
+      self.writer.add_summary(summary_str,  tf.train.global_step(self.sess, self.global_step))
       self.writer.flush()
     
   

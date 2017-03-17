@@ -112,7 +112,7 @@ def main(_):
     print('You pressed Ctrl+C!')
     #save checkpoint?
     print('saving checkpoints')
-    model.save(0,FLAGS.summary_dir+FLAGS.log_tag)
+    model.save(FLAGS.summary_dir+FLAGS.log_tag)
     #rosinterface.close()
     sess.close()
     print('done.')
@@ -156,13 +156,13 @@ def main(_):
     # write summary
     try:
       sumvar=[np.mean(train_loss), np.mean(val_loss), activation_images]
-      model.summarize(ep, sumvar)
+      model.summarize(sumvar)
     except Exception as e:
       print('failed to summarize', e)
-    # write checkpoint every 100 episodes
+    # write checkpoint every x episodes
     if (ep%20==0 and ep!=0) or ep==(FLAGS.max_episodes-1):
       print('saved checkpoint')
-      model.save(ep,FLAGS.summary_dir+FLAGS.log_tag)
+      model.save(FLAGS.summary_dir+FLAGS.log_tag)
   # Training finished, time to test:
   # evaluate on val set
   test_loss=[]
