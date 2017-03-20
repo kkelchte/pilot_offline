@@ -26,7 +26,7 @@ tf.app.flags.DEFINE_string("checkpoint_path", '/home/klaas/tensorflow2/log/incep
 tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
 tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")
-
+tf.app.flags.DEFINE_boolean("save_activations", False, "Specify whether the activations are weighted.")
 """
 Build basic NN model
 """
@@ -143,7 +143,6 @@ class Model(object):
     '''run forward pass and return action prediction
     '''
     control, loss, _ = self.sess.run([self.outputs, self.total_loss, self.train_op], feed_dict={self.inputs: inputs, self.targets: targets})
-    #self.global_step += 1
     return control, loss
   
   def fig2buf(self, fig):
@@ -206,9 +205,12 @@ class Model(object):
     tf.summary.scalar("loss_training", loss_training)
     loss_validation = tf.Variable(0.)
     tf.summary.scalar("loss_validation", loss_validation)
-    act_images = tf.placeholder(tf.float32, [None, 1500, 1500, 1])
-    tf.summary.image("conv_activations", act_images, max_outputs=4)
-    self.summary_vars = [loss_training, loss_validation, act_images]
+    if FLAGS.save_activations:
+      act_images = tf.placeholder(tf.float32, [None, 1500, 1500, 1])
+      tf.summary.image("conv_activations", act_images, max_outputs=4)
+      self.summary_vars = [loss_training, loss_validation, act_images]
+    else:
+      self.summary_vars = [loss_training, loss_validation]
     self.summary_ops = tf.summary.merge_all()
 
   def summarize(self, sumvars):

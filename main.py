@@ -149,13 +149,16 @@ def main(_):
       if ok:
         _, batch_loss = model.forward(im_b, trgt_b)
         val_loss.append(batch_loss)
-      if index == 1: 
+      if index == 1 and FLAGS.save_activations: 
         activation_images = model.plot_activations(im_b)
     print('validation : ',print_dur(val_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(val_loss), max(val_loss), min(val_loss)))
     sys.stdout.flush()
     # write summary
     try:
-      sumvar=[np.mean(train_loss), np.mean(val_loss), activation_images]
+      if FLAGS.save_activations:
+        sumvar=[np.mean(train_loss), np.mean(val_loss), activation_images]
+      else:
+        sumvar=[np.mean(train_loss), np.mean(val_loss)]
       model.summarize(sumvar)
     except Exception as e:
       print('failed to summarize', e)
