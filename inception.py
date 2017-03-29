@@ -484,12 +484,12 @@ def inception_v3(inputs,
         aux_logits = end_points['Mixed_6e']
         with tf.variable_scope('AuxLogits'):
           kernel_size = _reduced_kernel_size_for_small_input(net, [8, 8])
-          net = slim.avg_pool2d(net, kernel_size, padding='VALID',
+          aux_logits = slim.avg_pool2d(net, kernel_size, padding='VALID',
                               scope='AvgPool_1a_{}x{}'.format(*kernel_size))
           # 1 x 1 x 2048
-          net = slim.fully_connected(net, 100, activation_fn=tf.nn.relu, scope='layer1_depth_aux')
+          aux_logits = slim.fully_connected(aux_logits, 100, activation_fn=tf.nn.relu, scope='layer1_depth_aux')
           # 1 x 1 x 100
-          aux_logits = slim.fully_connected(net, 64, activation_fn=tf.nn.relu, scope='layer2_depth_aux')
+          aux_logits = slim.fully_connected(aux_logits, 64, activation_fn=tf.nn.relu, scope='layer2_depth_aux')
           end_points['AuxLogits'] = aux_logits
 
       # Final pooling and prediction
