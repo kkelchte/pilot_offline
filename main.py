@@ -22,6 +22,8 @@ import shutil
 import time
 import signal
 
+import depth_estim
+
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -36,7 +38,7 @@ tf.app.flags.DEFINE_integer("max_episodes", 101, "The maximum number of episodes
 # Print output of ros verbose or not
 tf.app.flags.DEFINE_boolean("verbose", True, "Print output of ros verbose or not.")
 # Directory for storing tensorboard summary results
-tf.app.flags.DEFINE_string("summary_dir", '/home/klaas/tensorflow2/log/', "Choose the directory to which tensorflow should save the summaries.")
+tf.app.flags.DEFINE_string("summary_dir", '/esat/qayd/kkelchte/tensorflow/offline_log/', "Choose the directory to which tensorflow should save the summaries.")
 # Add log_tag to overcome overwriting of other log files
 tf.app.flags.DEFINE_string("log_tag", 'testing', "Add log_tag to overcome overwriting of other log files.")
 # Choose to run on gpu or cpu
@@ -47,6 +49,7 @@ tf.app.flags.DEFINE_integer("random_seed", 123, "Set the random seed to get simi
 tf.app.flags.DEFINE_boolean("owr", False, "Overwrite existing logfolder when it is not testing.")
 tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the actions can go. Default: [-1:1].")
 
+tf.app.flags.DEFINE_string("network", 'inception', "Define the type of network: inception / depth.")
 # ===========================
 #   Save settings
 # ===========================
@@ -87,8 +90,16 @@ def main(_):
   np.random.seed(FLAGS.random_seed)
   tf.set_random_seed(FLAGS.random_seed)
   
-  #define the size of the image: SxS
-  state_dim = inception.inception_v3.default_image_size
+  #define the size of the network input 
+  if FLAGS.network == 'inception':
+    state_dim = [1, inception.inception_v3.default_image_size, inception.inception_v3.default_image_size, 3]
+  elif FLAGS.network == 'fc_control':
+    state_dim = [1, fc_control.fc_control_v1.input_size]
+  elif FLAGS.network =='depth':
+    state_dim = depth_estim.depth_estim_v1.input_size
+  else:
+    raise NameError( 'Network is unknown: ', FLAGS.network)
+  # state_dim = inception.inception_v3.default_image_size
   action_dim = 1 #initially only turn and go straight
   
   print( "Number of State Dimensions:", state_dim)
@@ -97,10 +108,10 @@ def main(_):
   
   tf.logging.set_verbosity(tf.logging.DEBUG)
   
-  # Random input from tensorflow (could be placeholder)
-  images=random_ops.random_uniform((1,state_dim,state_dim,3))
-  targets=random_ops.random_uniform((1,action_dim))
-  
+  # inputs=random_ops.random_uniform(state_dim)
+  # targets=random_ops.random_uniform((1,action_dim))
+  # depth_targets=random_ops.random_uniform((1,1,1,64))
+
   config=tf.ConfigProto(allow_soft_placement=True)
   config.gpu_options.allow_growth = True
   sess = tf.Session(config=config)

@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 
+
+import depth_estim
+
 FLAGS = tf.app.flags.FLAGS
 
 # Weight decay of inception network
@@ -19,10 +22,10 @@ tf.app.flags.DEFINE_float("init_scale", 0.0027, "Std of uniform initialization")
 # Base learning rate
 tf.app.flags.DEFINE_float("learning_rate", 0.00001, "Start learning rate.")
 # Specify where the Model, trained on ImageNet, was saved.
-tf.app.flags.DEFINE_string("model_path", '/home/klaas/tensorflow2/models/inception_v3.ckpt', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
+tf.app.flags.DEFINE_string("model_path", '/users/visics/kkelchte/tensorflow/models/inception_v3.ckpt', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # Define the initializer
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
-tf.app.flags.DEFINE_string("checkpoint_path", '/home/klaas/tensorflow2/log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
+tf.app.flags.DEFINE_string("checkpoint_path", '/esat/qayd/kkelchte/tensorflow/offline_log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
 tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
 tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")
@@ -39,6 +42,7 @@ class Model(object):
     self.output_size = output_size
     self.bound=bound
     self.input_size = input_size
+    self.input_size[0] = None
     self.prefix = prefix
     self.device = device
     self.writer = writer
@@ -52,9 +56,13 @@ class Model(object):
     # build network from SLIM model
     self.global_step = tf.Variable(0, name='global_step', trainable=False)
     self.define_network()
+    
     if not FLAGS.continue_training:
-      checkpoint_path = FLAGS.model_path
-      list_to_exclude = []
+      if FLAGS.model_path[0]!='/':
+        checkpoint_path = '/esat/qayd/kkelchte/tensorflow/offline_log/'+FLAGS.model_path
+      else:
+        checkpoint_path = FLAGS.model_path
+      list_to_exclude = ["global_step"]
       if FLAGS.exclude_from_layer <= 7:
         list_to_exclude.extend(["InceptionV3/Mixed_7a", "InceptionV3/Mixed_7b", "InceptionV3/Mixed_7c"])
       if FLAGS.exclude_from_layer <= 6:
@@ -62,13 +70,18 @@ class Model(object):
       if FLAGS.exclude_from_layer <= 5:
         list_to_exclude.extend(["InceptionV3/Mixed_5a", "InceptionV3/Mixed_5b", "InceptionV3/Mixed_5c", "InceptionV3/Mixed_5d"])
       list_to_exclude.extend(["InceptionV3/Logits", "InceptionV3/AuxLogits"])
+
+      if FLAGS.network == 'depth':
+        # control layers are not in pretrained depth checkpoint
+        list_to_exclude.extend(['FC/control_1/weights','FC/control_1/biases','FC/control_2/weights','FC/control_2/biases'])
       #print list_to_exclude
+      # import pdb; pdb.set_trace()
       variables_to_restore = slim.get_variables_to_restore(exclude=list_to_exclude)
-      init_assign_op, init_feed_dict = slim.assign_from_checkpoint(checkpoint_path, variables_to_restore)
+      init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
     else:
       variables_to_restore = slim.get_variables_to_restore()
       if FLAGS.checkpoint_path[0]!='/':
-        checkpoint_path = '/home/klaas/tensorflow2/log/'+FLAGS.checkpoint_path
+        checkpoint_path = '/esat/qayd/kkelchte/tensorflow/offline_log/'+FLAGS.checkpoint_path
       else:
         checkpoint_path = FLAGS.checkpoint_path
       init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
@@ -88,24 +101,31 @@ class Model(object):
     init_all=tf_variables.global_variables_initializer()
     self.sess.run([init_all])
     self.sess.run([init_assign_op], init_feed_dict)
-    print('Successfully loaded model from:', checkpoint_path)
-    
+    print('Successfully loaded model from:', checkpoint_path)  
+    import pdb; pdb.set_trace()
+  
   def define_network(self):
     '''build the network and set the tensors
     '''
     with tf.device(self.device):
-      self.inputs = tf.placeholder(tf.float32, shape = [None, self.input_size, self.input_size, 3])
-      #inputs = tf.placeholder(tf.float32, shape = [None, 299, 299, 3])
-      ### initializer is defined in the arg scope of inception.
-      ### need to stick to this arg scope in order to load the inception checkpoint properly...
-      ### weights are now initialized uniformly 
-      with slim.arg_scope(inception.inception_v3_arg_scope(weight_decay=FLAGS.weight_decay,
-                           stddev=FLAGS.init_scale)):
-        #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
-        self.outputs, self.endpoints = inception.inception_v3(self.inputs, num_classes=self.output_size, is_training=True)  
-        if(self.bound!=1 or self.bound!=0):
-          self.outputs = tf.mul(self.outputs, self.bound) # Scale output to -bound to bound
-      
+      self.inputs = tf.placeholder(tf.float32, shape = self.input_size)
+      if FLAGS.network=='inception':
+        ### initializer is defined in the arg scope of inception.
+        ### need to stick to this arg scope in order to load the inception checkpoint properly...
+        ### weights are now initialized uniformly 
+        with slim.arg_scope(inception.inception_v3_arg_scope(weight_decay=FLAGS.weight_decay,
+                             stddev=FLAGS.init_scale)):
+          #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
+          self.outputs, self.endpoints = inception.inception_v3(self.inputs, num_classes=self.output_size, is_training=True)  
+          
+      if FLAGS.network=='depth':
+        with slim.arg_scope(depth_estim.arg_scope(weight_decay=FLAGS.weight_decay, stddev=FLAGS.init_scale)):
+          # Define model with SLIM, second returned value are endpoints to get activations of certain nodes
+          self.outputs, self.endpoints = depth_estim.depth_estim_v1(self.inputs, num_classes=self.output_size, is_training=True)
+      else:
+        raise(IOError('Network flag is unknown:',FLAGS.network))
+      if(self.bound!=1 or self.bound!=0):
+        self.outputs = tf.mul(self.outputs, self.bound) # Scale output to -bound to bound 
   def define_loss(self):
     '''tensor for calculating the loss
     '''

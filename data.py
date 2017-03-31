@@ -21,7 +21,7 @@ FLAGS = tf.app.flags.FLAGS
 # ===========================
 tf.app.flags.DEFINE_string("dataset", "esat","pick the dataset in data_root from which your movies can be found.")
 tf.app.flags.DEFINE_integer("batch_size", 16, "The size of the minibatch used for training.")
-tf.app.flags.DEFINE_string("data_root", "/home/klaas/pilot_data", "Define the root folder of the different datasets.")
+tf.app.flags.DEFINE_string("data_root", "/esat/qayd/kkelchte/pilot_data", "Define the root folder of the different datasets.")
 tf.app.flags.DEFINE_integer("num_threads", 1, "The number of threads for loading one minibatch.")
 tf.app.flags.DEFINE_float("mean", 0.2623, "Define the mean of the input data for centering around zero. default taken from esat data.")
 tf.app.flags.DEFINE_float("std", 0.1565, "Define the standard deviation of the data for normalization. default taken from esat data.")
