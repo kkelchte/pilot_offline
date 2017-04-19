@@ -2,9 +2,9 @@
 # This scripts sets some parameters for running a tasks,
 # creates a condor and shell scripts and launches the stuff on condor.
 
-TASK='main.py --max_episodes 1000' # 0 	
+TASK='main.py --max_episodes 1000 --network depth --dataset mix --model_path depth_net_checkpoint --auxiliary_depth True' # 0 	
 #1: normal
-log_tag="$(date +%F_%H%M)_esat_noisy"
+log_tag="$(date +%F_%H%M)_mix_auxdepth"
 #2: with gradient multipliers
 #grad_mul="True"
 #learning_rate="0.001"
@@ -91,9 +91,9 @@ echo "Request_GPUs = 1" >> $condor_file
 # ---4g option---
 if [ -z $andromeda ]; then
 echo "RequestMemory = 15900" >> $condor_file
-#echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)">> $condor_file
+echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)">> $condor_file
 #echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
-echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5) && (machine != \"askoy.esat.kuleuven.be\" )">> $condor_file
+# echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5) && (machine != \"askoy.esat.kuleuven.be\" )">> $condor_file
 else
 # ---andromeda option---
 echo "RequestMemory = 62000" >> $condor_file
@@ -111,9 +111,9 @@ echo "RequestDisk      = 25G" >> $condor_file
 #wall time ==> generally assumed a job should take 6hours longest,
 #if you want longer or shorter you can set the number of seconds. (max 1h ~ +3600s)
 #100 hours means 4 days 
-echo "+RequestWalltime = 360000" >> $condor_file 
+# echo "+RequestWalltime = 360000" >> $condor_file 
 #echo "+RequestWalltime = 10800" >> $condor_file
-echo "">> $condor_file
+# echo "">> $condor_file
 #echo "Requirements = (CUDAGlobalMemoryMb > 1900) && (CUDADeviceName == 'GeForce GTX 960' || CUDADeviceName == 'GeForce GTX 980' ) && (machineowner == Visics)" >> $condor_file
 #echo "Requirements = ((machine == "vega.esat.kuleuven.be") || (machine == "wasat.esat.kuleuven.be") || (machine == "yildun.esat.kuleuven.be"))" >> $condor_file
 

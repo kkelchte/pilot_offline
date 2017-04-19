@@ -1,6 +1,4 @@
-
-sed -i 's/home\/klaas\/tensorflow2\/models/users\/visics\/kkelchte\/tensorflow\/models/' *.py
-sed -i 's/home\/klaas\/tensorflow2\/log/esat\/qayd\/kkelchte\/tensorflow\/offline_log/' *.py
-sed -i 's/home\/klaas/esat\/qayd\/kkelchte/' *.py
-
-# TODO Adapt save activation images
+# change from qayd folders to alienware folders
+sed -i 's/users\/visics\/kkelchte\/tensorflow\/models/home\/klaas\/tensorflow2\/models/' *.py
+sed -i 's/esat\/qayd\/kkelchte\/tensorflow\/offline_log/home\/klaas\/tensorflow2\/log/' *.py
+sed -i 's/esat\/qayd\/kkelchte/home\/klaas/' *.py

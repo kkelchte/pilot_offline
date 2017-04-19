@@ -30,7 +30,7 @@ FLAGS = tf.app.flags.FLAGS
 # ===========================
 #   Training Parameters
 # ===========================
-tf.app.flags.DEFINE_integer("max_episodes", 101, "The maximum number of episodes (~runs through all the training data.)")
+tf.app.flags.DEFINE_integer("max_episodes", 1001, "The maximum number of episodes (~runs through all the training data.)")
 
 # ===========================
 #   Utility Parameters
@@ -50,6 +50,9 @@ tf.app.flags.DEFINE_boolean("owr", False, "Overwrite existing logfolder when it 
 tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the actions can go. Default: [-1:1].")
 
 tf.app.flags.DEFINE_string("network", 'inception', "Define the type of network: inception / depth.")
+tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether the horizontal line of depth is predicted as auxiliary task in the feature.")
+tf.app.flags.DEFINE_boolean("plot_depth", True, "Specify whether the depth predictions is saved as images.")
+
 # ===========================
 #   Save settings
 # ===========================
@@ -68,8 +71,8 @@ def save_config(logfolder, file_name = "configuration"):
   tree = ET.ElementTree(root)
   tree.write(os.path.join(logfolder,file_name+".xml"), encoding="us-ascii", xml_declaration=True, method="xml")
 
-def print_dur(start_time):
-  duration = (time.time()-start_time)
+def print_dur(duration_time):
+  duration = duration_time #(time.time()-start_time)
   m, s = divmod(duration, 60)
   h, m = divmod(m, 60)
   return "time: %dh:%02dm:%02ds" % (h, m, s)
@@ -131,45 +134,76 @@ def main(_):
   print('------------Press Ctrl+C to end the learning')
   signal.signal(signal.SIGINT, signal_handler)
   
-  #rosinterface.launch(FLAGS.launchfile)
-  #rosnode = rosinterface.PilotNode(model, FLAGS.summary_dir+FLAGS.log_tag)
-  data.prepare_data((state_dim, state_dim, 3))
-  for ep in range(FLAGS.max_episodes):
+  def run_episode(data_type):
+    '''run over batches
+    return different losses
+    type: 'train', 'val' or 'test'
+    '''
+    activation_images = []
+    depth_predictions = []
     start_time=time.time()
+    data_loading_time = 0
+    calculation_time = 0
+    start_data_time = time.time()
+    tot_loss=[]
+    ctr_loss=[]
+    dep_loss=[]
+    for index, ok, batch in data.generate_batch(data_type):
+      data_loading_time+=(time.time()-start_data_time)
+      start_calc_time=time.time()
+      if ok:
+        im_b = np.array([_[0] for _ in batch])
+        trgt_b = np.array([[_[1]] for _ in batch])
+        depth_b = np.array([_[2] for _ in batch])
+        if not FLAGS.auxiliary_depth:
+          if data_type=='train':
+            _, losses = model.backward(im_b, trgt_b)
+          else:
+            _, losses = model.forward(im_b, targets = trgt_b)
+          dep_loss.append(0)
+        else:
+          if data_type=='train':
+            _, losses = model.backward(im_b, trgt_b, depth_b)
+          else:
+            _, losses = model.forward(im_b, targets = trgt_b, depth_targets = depth_b)
+          dep_loss.append(losses[2])
+        tot_loss.append(losses[0])
+        ctr_loss.append(losses[1])
+        if index == 1 and data_type=='val':
+          if FLAGS.save_activations:
+            activation_images = model.plot_activations(im_b)
+          if FLAGS.plot_depth:
+            depth_predictions = model.plot_depth(im_b, depth_b)
+      calculation_time+=(time.time()-start_calc_time)
+      start_data_time = time.time()
+    if len(tot_loss)==0:
+      raise IOError('Running episode ',data_type,' failed on all batches of this episode.')  
+    print('>>{0}: data time {1}; calc time {2}'.format(data_type.upper(),print_dur(data_loading_time),print_dur(calculation_time)))
+    print('losses: tot {0:.3g}; ctrl {1:.3g}; depth {2:.3g}'.format(np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss)))
+    sys.stdout.flush()
+
+    results = [np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss)]
+    if len(activation_images) != 0:
+      results.append(activation_images)
+    if len(depth_predictions) != 0:
+      results.append(depth_predictions)
+    return results
+
+  data.prepare_data((state_dim[1], state_dim[2], state_dim[3]))
+  # import pdb; pdb.set_trace()
+  for ep in range(FLAGS.max_episodes):
     print('start episode:', ep)
-    train_loss=[]
-    val_loss=[]
-    # train episode
-    for index, ok, im_b, trgt_b in data.generate_batch('train'):
-      if ok:
-        try:
-          _, batch_loss = model.backward(im_b, trgt_b)
-        except Exception as e:
-          print('failed to train on this batch: ',e)
-        #print(batch_loss)
-        train_loss.append(batch_loss)
-    if len(train_loss)==0:
-      raise IOError('Training failed on all batches of this episode.')  
-    print('training : ',print_dur(start_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(train_loss), max(train_loss), min(train_loss)))
-    sys.stdout.flush()
+    sumvar=[]
+    # ----------- train episode
+    results = run_episode('train')
+    sumvar.extend(results)
     
-    # evaluate on val set
-    val_time= time.time()
-    activation_images=[]
-    for index, ok, im_b, trgt_b in data.generate_batch('val'):
-      if ok:
-        _, batch_loss = model.forward(im_b, trgt_b)
-        val_loss.append(batch_loss)
-      if index == 1 and FLAGS.save_activations: 
-        activation_images = model.plot_activations(im_b)
-    print('validation : ',print_dur(val_time),'loss:[avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(val_loss), max(val_loss), min(val_loss)))
-    sys.stdout.flush()
-    # write summary
+    # ----------- validate episode
+    results = run_episode('val')
+    sumvar.extend(results)
+      
+    # ----------- write summary
     try:
-      if FLAGS.save_activations:
-        sumvar=[np.mean(train_loss), np.mean(val_loss), activation_images]
-      else:
-        sumvar=[np.mean(train_loss), np.mean(val_loss)]
       model.summarize(sumvar)
     except Exception as e:
       print('failed to summarize', e)
@@ -177,21 +211,8 @@ def main(_):
     if (ep%20==0 and ep!=0) or ep==(FLAGS.max_episodes-1):
       print('saved checkpoint')
       model.save(FLAGS.summary_dir+FLAGS.log_tag)
-  # Training finished, time to test:
-  # evaluate on val set
-  test_loss=[]
-  for index, ok, im_b, trgt_b in data.generate_batch('test'):
-    if ok:
-      _, batch_loss = model.forward(im_b, trgt_b)
-      test_loss.append(batch_loss)
-  print('validation : ',print_dur(start_time),'loss: [avg {0:.3f}; max {1:.3f}; min {2:.3f}]'.format(np.mean(test_loss), max(test_loss), min(test_loss)))
-    
-  #for i in range(10):
-    #inpt, trgt = sess.run([images, targets])
-    #action, loss = model.backward(inpt, trgt)
-    #model.summarize(i, [loss, 10])
-  #import pdb; pdb.set_trace()
-    
+  # ------------ test
+  results = run_episode('test')  
   
     
 if __name__ == '__main__':
