@@ -185,7 +185,8 @@ class Model(object):
     '''
     with tf.device(self.device):
       # Specify the optimizer and create the train op:  
-      self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr) 
+      # self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr) 
+      self.optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr) 
       # Create the train_op and scale the gradients by providing a map from variable
       # name (or variable) to a scaling coefficient:
       if FLAGS.grad_mul:
@@ -240,7 +241,7 @@ class Model(object):
       losses = [tloss, closs]
       return control, losses
     else:
-      control, tloss, closs, dloss, _ , weights= self.sess.run([self.outputs, self.total_loss, self.loss, self.depth_loss, self.train_op, self.weights], feed_dict={self.inputs: inputs, self.targets: targets, self.depth_targets:depth_targets})
+      control, tloss, closs, dloss, _ , weights= self.sess.run([self.outputs, self.total_loss, self.loss, self.depth_loss, self.train_op, self.weights], feed_dict={self.inputs: inputs, self.targets: targets, self.depth_targets: depth_targets})
       losses = [tloss, closs, dloss]
       # plt.subplot(1,2, 1)
       # plt.imshow(depth_targets[0])
@@ -359,7 +360,7 @@ class Model(object):
       tf.summary.image("conv_activations", act_images, max_outputs=4)
       self.summary_vars.append(act_images)
     
-    if FLAGS.auxiliary_depth:
+    if FLAGS.auxiliary_depth and FLAGS.plot_depth:
       dep_images = tf.placeholder(tf.float32, [None, 500, 500, 3])
       tf.summary.image("depth_predictions", dep_images, max_outputs=4)
       self.summary_vars.append(dep_images)

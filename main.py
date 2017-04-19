@@ -51,7 +51,7 @@ tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the a
 
 tf.app.flags.DEFINE_string("network", 'inception', "Define the type of network: inception / depth.")
 tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether the horizontal line of depth is predicted as auxiliary task in the feature.")
-tf.app.flags.DEFINE_boolean("plot_depth", True, "Specify whether the depth predictions is saved as images.")
+tf.app.flags.DEFINE_boolean("plot_depth", False, "Specify whether the depth predictions is saved as images.")
 
 # ===========================
 #   Save settings
@@ -114,8 +114,8 @@ def main(_):
   # inputs=random_ops.random_uniform(state_dim)
   # targets=random_ops.random_uniform((1,action_dim))
   # depth_targets=random_ops.random_uniform((1,1,1,64))
-
-  config=tf.ConfigProto(allow_soft_placement=True)
+  gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
+  config=tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
   config.gpu_options.allow_growth = True
   sess = tf.Session(config=config)
   writer = tf.summary.FileWriter(FLAGS.summary_dir+FLAGS.log_tag, sess.graph)

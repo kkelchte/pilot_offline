@@ -19,7 +19,7 @@ FLAGS = tf.app.flags.FLAGS
 # ===========================
 #   Data Parameters
 # ===========================
-tf.app.flags.DEFINE_string("dataset", "esat","pick the dataset in data_root from which your movies can be found.")
+tf.app.flags.DEFINE_string("dataset", "mix","pick the dataset in data_root from which your movies can be found.")
 tf.app.flags.DEFINE_integer("batch_size", 16, "The size of the minibatch used for training.")
 tf.app.flags.DEFINE_string("data_root", "/esat/qayd/kkelchte/pilot_data", "Define the root folder of the different datasets.")
 tf.app.flags.DEFINE_integer("num_threads", 4, "The number of threads for loading one minibatch.")
