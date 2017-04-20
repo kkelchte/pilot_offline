@@ -21,8 +21,10 @@ tf.app.flags.DEFINE_float("weight_decay", 0.00001, "Weight decay of inception ne
 tf.app.flags.DEFINE_float("init_scale", 0.0027, "Std of uniform initialization")
 # Base learning rate
 tf.app.flags.DEFINE_float("learning_rate", 0.0001, "Start learning rate.")
+tf.app.flags.DEFINE_float("depth_weight", 0.01, "Define the weight applied to the depth values in the loss relative to the control loss.")
 # Specify where the Model, trained on ImageNet, was saved.
-tf.app.flags.DEFINE_string("model_path", '/users/visics/kkelchte/tensorflow/models', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
+tf.app.flags.DEFINE_string("model_path", 'depth_net_checkpoint/checkpoint', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
+# tf.app.flags.DEFINE_string("model_path", '/users/visics/kkelchte/tensorflow/models', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # Define the initializer
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
 tf.app.flags.DEFINE_string("checkpoint_path", '/esat/qayd/kkelchte/tensorflow/offline_log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
@@ -33,6 +35,9 @@ tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from m
 tf.app.flags.DEFINE_boolean("save_activations", False, "Specify whether the activations are weighted.")
 tf.app.flags.DEFINE_float("dropout_keep_prob", 1.0, "Specify the probability of dropout to keep the activation.")
 tf.app.flags.DEFINE_integer("clip_grad", 0, "Specify the max gradient norm: default 0, recommended 4.")
+tf.app.flags.DEFINE_string("optimizer", 'adam', "Specify optimizer, options: adam, adadelta")
+tf.app.flags.DEFINE_boolean("plot_histograms", True, "Specify whether to plot histograms of the weights.")
+
 
 """
 Build basic NN model
@@ -160,6 +165,11 @@ class Model(object):
           self.auxlogits = self.endpoints['fully_connected_1']
           self.controls, _ = depth_estim.depth_estim_v1(self.inputs, num_classes=self.output_size, is_training=False, reuse = True)
           self.pred_depth = _['fully_connected_1']
+          if FLAGS.plot_histograms:
+            for v in tf.global_variables():
+              # print v.name
+              # import pdb; pdb.set_trace()
+              tf.summary.histogram(v.name.split(':')[0], v)
           
       else:
         raise(IOError('Network flag is unknown:',FLAGS.network))
@@ -171,12 +181,14 @@ class Model(object):
     '''
     with tf.device(self.device):
       self.targets = tf.placeholder(tf.float32, [None, self.output_size])
+      # self.loss = losses.mean_squared_error(tf.clip_by_value(self.outputs,1e-10,1.0), self.targets)
       self.loss = losses.mean_squared_error(self.outputs, self.targets)
       if FLAGS.auxiliary_depth:
         # self.depth_targets = tf.placeholder(tf.float32, [None,1,1,64])
         self.depth_targets = tf.placeholder(tf.float32, [None,55,74])
-        self.weights = 0.001*tf.cast(tf.greater(self.depth_targets, 0), tf.float32)
-        self.depth_loss = losses.mean_squared_error(self.auxlogits, self.depth_targets, weights=self.weights)
+        self.weights = FLAGS.depth_weight*tf.cast(tf.greater(self.depth_targets, 0), tf.float32)
+        # self.depth_loss = losses.mean_squared_error(tf.clip_by_value(self.auxlogits,1e-10,1.0), tf.clip_by_value(self.depth_targets,1e-10,1.0), weights=self.weights)
+        self.depth_loss = losses.mean_squared_error(self.auxlogits,self.depth_targets,weights=self.weights)
         # self.depth_loss = losses.mean_squared_error(self.auxlogits, self.depth_targets, weights=0.0001)
       self.total_loss = losses.get_total_loss()
       
@@ -184,9 +196,13 @@ class Model(object):
     '''applying gradients to the weights from normal loss function
     '''
     with tf.device(self.device):
-      # Specify the optimizer and create the train op:  
-      # self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr) 
-      self.optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr) 
+      # Specify the optimizer and create the train op:
+      if FLAGS.optimizer == 'adam':    
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr) 
+      elif FLAGS.optimizer == 'adadelta':
+        self.optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr) 
+      else:
+        raise IOError('Model: Unknown optimizer.')
       # Create the train_op and scale the gradients by providing a map from variable
       # name (or variable) to a scaling coefficient:
       if FLAGS.grad_mul:
@@ -205,52 +221,52 @@ class Model(object):
         self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, global_step=self.global_step, gradient_multipliers=gradient_multipliers, clip_gradient_norm=FLAGS.clip_grad)
       # self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, gradient_multipliers=gradient_multipliers, global_step=self.global_step)
         
-  def forward(self, inputs, aux=False, targets=None, depth_targets=None):
+  def forward(self, inputs, aux=False, targets=[], depth_targets=[]):
     '''run forward pass and return action prediction
     '''
-    auxdepth = None
-    if aux: #forward run returning auxiliary predictions (depth, odometry, OF)
-      if targets == None:       
-        # print 'aux True - No Targets'
-        control, auxdepth = self.sess.run([self.controls, self.pred_depth], feed_dict={self.inputs: inputs})
-        return control, auxdepth
-      else:
-        # ! Variables of batchnormalization are updated in this situation!
-        control, tloss, closs, auxdepth = self.sess.run([self.controls, self.total_loss, self.loss, self.pred_depth], feed_dict={self.inputs: inputs, self.targets: targets})
-        return control, [tloss, closs], auxdepth 
-    else:
-      if targets == None:
-        control = self.sess.run(self.controls, feed_dict={self.inputs: inputs})
-        return control, []
-      else:
-        # ! Variables of batchnormalization are updated in this situation!
-        if depth_targets != None:
-          control, tloss, closs, dloss = self.sess.run([self.controls, self.total_loss,  self.loss, self.depth_loss], feed_dict={self.inputs: inputs, self.targets: targets, self.depth_targets: depth_targets})
-          losses = [tloss, closs, dloss]
-        # ! Variables of batchnormalization are updated in this situation!
-        else:
-          control, tloss, closs = self.sess.run([self.controls, self.total_loss,  self.loss], feed_dict={self.inputs: inputs, self.targets: targets})
-          losses = [tloss, closs]
-        return control, losses
+    tensors = [self.controls]
+    feed_dict={self.inputs: inputs}
+    if aux: tensors.append(self.pred_depth)
+    if len(targets) != 0: 
+      tensors.extend([self.total_loss, self.loss])
+      feed_dict[self.targets] = targets
+    if len(depth_targets) != 0: 
+      tensors.append(self.depth_loss)
+      feed_dict[self.depth_targets] = depth_targets
+    results = self.sess.run(tensors, feed_dict=feed_dict)
+    losses = []
+    control = results.pop(0)
+    if aux: auxdepth = results.pop(0)
+    if len(targets)!=0:
+      losses.append(results.pop(0)) # total loss
+      losses.append(results.pop(0)) # control loss
+    if len(depth_targets) != 0:
+      losses.append(results.pop(0)) # depth loss
+    if aux:
+      if len(losses)==0: return control, auxdepth
+      else: return control, losses, auxdepth
+    else: return control, losses
 
-  def backward(self, inputs, targets, depth_targets=None):
+  def backward(self, inputs, targets, depth_targets=[]):
     '''run forward pass and return action prediction
     '''
-    if not FLAGS.auxiliary_depth:
-      control, tloss, closs, _ = self.sess.run([self.outputs, self.total_loss, self.loss, self.train_op], feed_dict={self.inputs: inputs, self.targets: targets})
-      losses = [tloss, closs]
-      return control, losses
-    else:
-      control, tloss, closs, dloss, _ , weights= self.sess.run([self.outputs, self.total_loss, self.loss, self.depth_loss, self.train_op, self.weights], feed_dict={self.inputs: inputs, self.targets: targets, self.depth_targets: depth_targets})
-      losses = [tloss, closs, dloss]
-      # plt.subplot(1,2, 1)
-      # plt.imshow(depth_targets[0])
-      # plt.subplot(1,2, 2)
-      # plt.imshow(weights[0])
-      # plt.show()
-      # import pdb; pdb.set_trace()
-      return control, losses
-  
+    tensors = [self.outputs, self.train_op, self.total_loss, self.loss]
+    feed_dict = {self.inputs: inputs, self.targets: targets}
+    if FLAGS.auxiliary_depth and len(depth_targets)!=0: 
+      tensors.append(self.depth_loss)
+      feed_dict[self.depth_targets] = depth_targets
+    results = self.sess.run(tensors, feed_dict=feed_dict)
+    control = results[0] # control always first, and train_op second
+    losses = results[2:] # rest is losses
+    # import pdb; pdb.set_trace()
+    # plt.subplot(1,2, 1)
+    # plt.imshow(depth_targets[0])
+    # plt.subplot(1,2, 2)
+    # plt.imshow(weights[0])
+    # plt.show()
+    # import pdb; pdb.set_trace()
+    return control, losses
+
   def fig2buf(self, fig):
     """
     Convert a plt fig to a numpy buffer
@@ -309,7 +325,7 @@ class Model(object):
     for i in range(n):
       plt.axis('off') 
       plt.subplot(n, 3, 1+3*i)
-      plt.imshow(inputs[i])
+      plt.imshow(inputs[i]*1/255.)
       plt.axis('off') 
       plt.subplot(n, 3, 2+3*i)
       plt.imshow(depths[i]*1/5.)

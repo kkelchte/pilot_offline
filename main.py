@@ -49,7 +49,7 @@ tf.app.flags.DEFINE_integer("random_seed", 123, "Set the random seed to get simi
 tf.app.flags.DEFINE_boolean("owr", False, "Overwrite existing logfolder when it is not testing.")
 tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the actions can go. Default: [-1:1].")
 
-tf.app.flags.DEFINE_string("network", 'inception', "Define the type of network: inception / depth.")
+tf.app.flags.DEFINE_string("network", 'depth', "Define the type of network: inception / depth.")
 tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether the horizontal line of depth is predicted as auxiliary task in the feature.")
 tf.app.flags.DEFINE_boolean("plot_depth", False, "Specify whether the depth predictions is saved as images.")
 

@@ -181,7 +181,8 @@ def generate_batch(data_type):
             # load image
             img_file = join(data_set[run_ind][0],'RGB', '{0:010d}.jpg'.format(data_set[run_ind][1][frame_ind]))
             im = Image.open(img_file)
-            im = sm.imresize(im,im_size,'nearest')
+            im = sm.imresize(im,im_size,'nearest').astype(float) #.astype(np.float32)
+            # im = sm.imresize(im,im_size,'nearest').astype(np.float32)
             # im = im * 1/255.
             # center the data around zero with 1standard devation
             # with tool 'get_mean_variance.py' in tensorflow2/examples/tools
@@ -195,6 +196,7 @@ def generate_batch(data_type):
               de = Image.open(depth_file)
               de = sm.imresize(de,de_size,'nearest')
               de = de * 1/255. * 5.
+              # de = de.astype(np.float32)
             # append rgb image, control and depth to batch
             batch.append((im, data_set[run_ind][2][frame_ind], de))
             # import pdb; pdb.set_trace()
@@ -247,7 +249,14 @@ if __name__ == '__main__':
   start_time=time.time()
   for index, ok, batch in generate_batch('train'):
     print('b: ',index,' ok ',ok,' ',print_dur(start_time))
-    
+    print 'RGB Image:'
+    print batch[0][0].shape
+    print type(batch[0][0][0,0,0])
+    print 'min: ',np.amin(batch[0][0]),' max: ',np.amax(batch[0][0])
+    print 'depth Image:'
+    print batch[0][2].shape
+    print type(batch[0][2][0,0])
+    print 'min: ',np.amin(batch[0][2]),' max: ',np.amax(batch[0][2])
     import pdb; pdb.set_trace()
     start_time=time.time()
   
