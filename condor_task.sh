@@ -2,9 +2,10 @@
 # This scripts sets some parameters for running a tasks,
 # creates a condor and shell scripts and launches the stuff on condor.
 
-TASK='main.py --max_episodes 1000 --network depth --dataset mix --model_path depth_net_checkpoint --auxiliary_depth True' # 0 	
-#1: normal
-log_tag="$(date +%F_%H%M)_mix_auxdepth"
+# TASK='main.py --dataset mix --auxiliary_depth True --optimizer adadelta ' # 0 	
+# log_tag="$(date +%F_%H%M)_mix_predepth_aux_adadel"
+TASK='main.py --dataset esat --continue_training True --optimizer adadelta --checkpoint_path 2017-04-20_1514_adam_lre-4_dw-1' # 0 	
+log_tag="$(date +%F_%H%M)_esat_cont_depth0420_1514"
 #2: with gradient multipliers
 #grad_mul="True"
 #learning_rate="0.001"

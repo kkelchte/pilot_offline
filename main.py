@@ -83,11 +83,15 @@ def main(_):
   if FLAGS.log_tag == 'testing' or FLAGS.owr:
     if os.path.isdir(FLAGS.summary_dir+FLAGS.log_tag):
       shutil.rmtree(FLAGS.summary_dir+FLAGS.log_tag,ignore_errors=True)
-  else :
-    if os.path.isdir(FLAGS.summary_dir+FLAGS.log_tag):
-      raise NameError( 'Logfolder already exists, overwriting alert: '+ FLAGS.summary_dir+FLAGS.log_tag ) 
-  os.mkdir(FLAGS.summary_dir+FLAGS.log_tag)
-  save_config(FLAGS.summary_dir+FLAGS.log_tag)
+  #else :
+  #  if os.path.isdir(FLAGS.summary_dir+FLAGS.log_tag):
+  #    raise NameError( 'Logfolder already exists, overwriting alert: '+ FLAGS.summary_dir+FLAGS.log_tag ) 
+  try:
+    os.mkdir(FLAGS.summary_dir+FLAGS.log_tag)
+  except OSError:
+    pass
+  else: #only save config if new directory was made
+    save_config(FLAGS.summary_dir+FLAGS.log_tag)
 
   # some startup settings
   np.random.seed(FLAGS.random_seed)
