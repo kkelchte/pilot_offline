@@ -32,7 +32,7 @@ tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the tra
 tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
 tf.app.flags.DEFINE_boolean("freeze", False, "Specify whether feature extracting network should be frozen and only the logit scope should be trained.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")
-tf.app.flags.DEFINE_boolean("save_activations", False, "Specify whether the activations are weighted.")
+tf.app.flags.DEFINE_boolean("plot_activations", False, "Specify whether the activations are weighted.")
 tf.app.flags.DEFINE_float("dropout_keep_prob", 1.0, "Specify the probability of dropout to keep the activation.")
 tf.app.flags.DEFINE_integer("clip_grad", 0, "Specify the max gradient norm: default 0, recommended 4.")
 tf.app.flags.DEFINE_string("optimizer", 'adam', "Specify optimizer, options: adam, adadelta")
@@ -262,6 +262,15 @@ class Model(object):
     # import pdb; pdb.set_trace()
     return control, losses
 
+  
+  def get_endpoint_activations(self, inputs):
+    '''Run forward through the network for this batch and return all activations
+    of all intermediate endpoints
+    '''
+    tensors = [ self.endpoints[ep] for ep in self.endpoints]
+    activations = self.sess.run(tensors, feed_dict={self.inputs:inputs})
+    return [ a.reshape(-1,1) for a in activations]
+
   def fig2buf(self, fig):
     """
     Convert a plt fig to a numpy buffer
@@ -280,19 +289,17 @@ class Model(object):
     buf = buf[0::1,0::1, 0:3] #slice to make image 4x smaller and use only the R channel of RGBA
     #buf = np.resize(buf,(500,500,1))
     return buf
-  
-  def get_endpoint_activations(self, inputs):
-    '''Run forward through the network for this batch and return all activations
-    of all intermediate endpoints
-    '''
-    tensors = [ self.endpoints[ep] for ep in self.endpoints]
-    activations = self.sess.run(tensors, feed_dict={self.inputs:inputs})
-    return [ a.reshape(-1,1) for a in activations]
 
   def plot_activations(self, inputs):
     activation_images = []
     tensors = []
-    endpoint_names = ['Conv2d_1a_3x3', 'Conv2d_2a_3x3', 'Conv2d_2b_3x3', 'Conv2d_3b_1x1']
+    if FLAGS.network == 'inception':
+      endpoint_names = ['Conv2d_1a_3x3', 'Conv2d_2a_3x3', 'Conv2d_2b_3x3', 'Conv2d_3b_1x1']
+    # elif FLAGS.network == 'depth':
+    #   endpoint_names = ['Conv']
+    else:
+      raise IOError('MODEL: cant plot activations for this network')
+
     for endpoint in endpoint_names:
       tensors.append(self.endpoints[endpoint])
     units = self.sess.run(tensors, feed_dict={self.inputs:inputs[0:1]})
@@ -354,27 +361,15 @@ class Model(object):
 
   def build_summaries(self):
     self.summary_vars = []
-    t_total_loss = tf.Variable(0.)
-    tf.summary.scalar("loss_train_total", t_total_loss)
-    self.summary_vars.append(t_total_loss)
-    t_control_loss = tf.Variable(0.)
-    tf.summary.scalar("loss_train_control", t_control_loss)
-    self.summary_vars.append(t_control_loss)
-    t_depth_loss = tf.Variable(0.)
-    tf.summary.scalar("loss_train_depth", t_depth_loss)
-    self.summary_vars.append(t_depth_loss)
-
-    v_total_loss = tf.Variable(0.)
-    tf.summary.scalar("loss_val_total", v_total_loss)
-    self.summary_vars.append(v_total_loss)
-    v_control_loss = tf.Variable(0.)
-    tf.summary.scalar("loss_val_control", v_control_loss)
-    self.summary_vars.append(v_control_loss)
-    v_depth_loss = tf.Variable(0.)
-    tf.summary.scalar("loss_val_depth", v_depth_loss)
-    self.summary_vars.append(v_depth_loss)
+    self.add_summary_var("loss_train_total")
+    self.add_summary_var("loss_train_control")
+    self.add_summary_var("loss_train_depth")
     
-    if FLAGS.save_activations:
+    self.add_summary_var("loss_val_total")
+    self.add_summary_var("loss_val_control")
+    self.add_summary_var("loss_val_depth")
+    
+    if FLAGS.plot_activations:
       act_images = tf.placeholder(tf.float32, [None, 1500, 1500, 3])
       tf.summary.image("conv_activations", act_images, max_outputs=4)
       self.summary_vars.append(act_images)
@@ -383,6 +378,7 @@ class Model(object):
       dep_images = tf.placeholder(tf.float32, [None, 500, 500, 3])
       tf.summary.image("depth_predictions", dep_images, max_outputs=4)
       self.summary_vars.append(dep_images)
+
     activations={}
     if FLAGS.plot_histograms:
       for ep in self.endpoints: # add activations to summary

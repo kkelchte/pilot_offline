@@ -179,7 +179,7 @@ def main(_):
         tot_loss.append(losses[0])
         ctr_loss.append(losses[1])
         if index == 1 and data_type=='val':
-          if FLAGS.save_activations:
+          if FLAGS.plot_activations:
             activation_images = model.plot_activations(im_b)
           if FLAGS.plot_depth:
             depth_predictions = model.plot_depth(im_b, depth_b)
