@@ -24,6 +24,9 @@ import signal
 
 import depth_estim
 
+# Block all the ugly printing...
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 FLAGS = tf.app.flags.FLAGS
 
 
