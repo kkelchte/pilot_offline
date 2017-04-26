@@ -113,7 +113,7 @@ def generate_batch(data_type):
   b=0
   while b < number_of_batches:
     if b>0 and b%10==0:
-      print('batch ',b,' of ',number_of_batches)
+      print('batch {0} of {1}'.format(b,number_of_batches))
     #print('batch ',cnt,' of ',number_of_batches)
     ok = True
     # Single threaded implementation

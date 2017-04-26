@@ -44,7 +44,7 @@ Build basic NN model
 """
 class Model(object):
  
-  def __init__(self,  session, input_size, output_size, prefix='model', device='/gpu:0', bound=1, writer=None):
+  def __init__(self,  session, input_size, output_size, prefix='model', device='/gpu:0', bound=1):
     '''initialize model
     '''
     self.sess = session
@@ -54,15 +54,8 @@ class Model(object):
     self.input_size[0] = None
     self.prefix = prefix
     self.device = device
-    self.writer = writer
     self.lr = FLAGS.learning_rate 
-    #if FLAGS.initializer == 'xavier':
-      #self.initializer=tf.contrib.layers.xavier_initializer()
-    #else:
-      #self.initializer = tf.random_uniform_initializer(-init_scale, init_scale)
-    # need to catch variables to restore before defining the training op
-    # because adam variables are not available in check point.
-    # build network from SLIM model
+    
     self.global_step = tf.Variable(0, name='global_step', trainable=False)
     self.define_network()
     
@@ -170,10 +163,6 @@ class Model(object):
               # print v.name
               # import pdb; pdb.set_trace()
               tf.summary.histogram(v.name.split(':')[0], v)
-            # tf.summary.histogram('test', self.endpoints['Conv'])
-            # for ep in self.endpoints: # add activations to summary
-            #   print ep
-            #   tf.summary.histogram('activations', self.endpoints[ep])
           
       else:
         raise(IOError('Network flag is unknown:',FLAGS.network))
@@ -292,6 +281,14 @@ class Model(object):
     #buf = np.resize(buf,(500,500,1))
     return buf
   
+  def get_endpoint_activations(self, inputs):
+    '''Run forward through the network for this batch and return all activations
+    of all intermediate endpoints
+    '''
+    tensors = [ self.endpoints[ep] for ep in self.endpoints]
+    activations = self.sess.run(tensors, feed_dict={self.inputs:inputs})
+    return [ a.reshape(-1,1) for a in activations]
+
   def plot_activations(self, inputs):
     activation_images = []
     tensors = []
@@ -386,6 +383,12 @@ class Model(object):
       dep_images = tf.placeholder(tf.float32, [None, 500, 500, 3])
       tf.summary.image("depth_predictions", dep_images, max_outputs=4)
       self.summary_vars.append(dep_images)
+    activations={}
+    if FLAGS.plot_histograms:
+      for ep in self.endpoints: # add activations to summary
+        activations[ep]=tf.placeholder(tf.float32,[None, 1])
+        tf.summary.histogram('activations_{}'.format(ep), activations[ep])
+        self.summary_vars.append(activations[ep])
     
     self.summary_ops = tf.summary.merge_all()
 

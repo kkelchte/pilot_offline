@@ -125,8 +125,9 @@ def main(_):
   config=tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
   config.gpu_options.allow_growth = True
   sess = tf.Session(config=config)
+  model = Model(sess, state_dim, action_dim, bound=FLAGS.action_bound)
   writer = tf.summary.FileWriter(FLAGS.summary_dir+FLAGS.log_tag, sess.graph)
-  model = Model(sess, state_dim, action_dim, writer=writer, bound=FLAGS.action_bound)
+  model.writer = writer
   #model=None
   
   def signal_handler(signal, frame):
@@ -148,6 +149,7 @@ def main(_):
     '''
     activation_images = []
     depth_predictions = []
+    endpoint_activations = []
     start_time=time.time()
     data_loading_time = 0
     calculation_time = 0
@@ -166,13 +168,13 @@ def main(_):
           if data_type=='train':
             _, losses = model.backward(im_b, trgt_b)
           else:
-            _, losses = model.forward(im_b, targets = trgt_b)
+            _, losses = model.forward(im_b, targets=trgt_b)
           dep_loss.append(0)
         else:
           if data_type=='train':
             _, losses = model.backward(im_b, trgt_b, depth_b)
           else:
-            _, losses = model.forward(im_b, targets = trgt_b, depth_targets = depth_b)
+            _, losses = model.forward(im_b, targets=trgt_b, depth_targets=depth_b)
           dep_loss.append(losses[2])
         tot_loss.append(losses[0])
         ctr_loss.append(losses[1])
@@ -181,6 +183,10 @@ def main(_):
             activation_images = model.plot_activations(im_b)
           if FLAGS.plot_depth:
             depth_predictions = model.plot_depth(im_b, depth_b)
+          if FLAGS.plot_histograms:
+            # stime = time.time()
+            endpoint_activations = model.get_endpoint_activations(im_b)
+            # print('plot activations: {}'.format((stime-time.time())))
       calculation_time+=(time.time()-start_calc_time)
       start_data_time = time.time()
     if len(tot_loss)==0:
@@ -194,26 +200,29 @@ def main(_):
       results.append(activation_images)
     if len(depth_predictions) != 0:
       results.append(depth_predictions)
+    if len(endpoint_activations) != 0:
+      results.extend(endpoint_activations)
     return results
 
   data.prepare_data((state_dim[1], state_dim[2], state_dim[3]))
   # import pdb; pdb.set_trace()
   for ep in range(FLAGS.max_episodes):
-    print('start episode:', ep)
+    print('start episode: {}'.format(ep))
     sumvar=[]
     # ----------- train episode
     results = run_episode('train')
+    # results = [0,0,0]
     sumvar.extend(results)
     
     # ----------- validate episode
     results = run_episode('val')
     sumvar.extend(results)
-      
+    
     # ----------- write summary
     try:
       model.summarize(sumvar)
     except Exception as e:
-      print('failed to summarize', e)
+      print('failed to summarize {}'.format(e))
     # write checkpoint every x episodes
     if (ep%20==0 and ep!=0) or ep==(FLAGS.max_episodes-1):
       print('saved checkpoint')
