@@ -7,6 +7,9 @@ from tensorflow.contrib.slim import model_analyzer as ma
 from tensorflow.python.ops import variables as tf_variables
 
 import matplotlib.pyplot as plt
+
+from sklearn.manifold import TSNE
+
 import numpy as np
 import math
 
@@ -290,44 +293,73 @@ class Model(object):
     #buf = np.resize(buf,(500,500,1))
     return buf
 
-  def plot_activations(self, inputs):
+
+
+  def plot_with_labels(self, low_d_weights, targets):
+    assert low_d_weights.shape[0] >= len(targets), "More targets than weights"
+    fig = plt.figure(figsize=(5,5))  #in inches
+    for i, label in enumerate(targets):
+        x, y = low_d_weights[i,:]
+        plt.scatter(x, y,s=50)
+        plt.annotate(label,
+                 xy=(x, y),
+                 xytext=(5, 2),
+                 textcoords='offset points',
+                 ha='right',
+                 va='bottom',
+                 size='medium')
+    buf = self.fig2buf(fig)
+    plt.clf()
+    plt.close()
+    return buf
+    # plt.show()
+    # plt.savefig(filename)
+
+
+
+  def plot_activations(self, inputs, targets=None):
     activation_images = []
     tensors = []
     if FLAGS.network == 'inception':
       endpoint_names = ['Conv2d_1a_3x3', 'Conv2d_2a_3x3', 'Conv2d_2b_3x3', 'Conv2d_3b_1x1']
-    # elif FLAGS.network == 'depth':
-    #   endpoint_names = ['Conv']
+      for endpoint in endpoint_names:
+        tensors.append(self.endpoints[endpoint])
+      units = self.sess.run(tensors, feed_dict={self.inputs:inputs[0:1]})
+      for j, unit in enumerate(units):
+        filters = unit.shape[3]
+        fig = plt.figure(1, figsize=(15,15))
+        fig.suptitle(endpoint_names[j], fontsize=40)
+        n_columns = 6
+        n_rows = math.ceil(filters / n_columns) + 1
+        for i in range(filters):
+            plt.subplot(n_rows, n_columns, i+1)
+            #plt.title('Filter ' + str(i), fontdict={'fontsize':10})
+            plt.imshow(unit[0,:,:,i], interpolation="nearest", cmap="gray")
+            plt.axis('off')
+        #plt.show()
+        buf=self.fig2buf(fig)
+        plt.clf()
+        plt.close()
+        #plt.matshow(buf[:,:,0], fignum=100, cmap=plt.cm.gray)
+        #plt.axis('off')
+        #plt.show()
+        #import pdb; pdb.set_trace()
+        activation_images.append(buf)
+    # Plot using t-SNE
+    elif FLAGS.network == 'depth':
+      activations = self.sess.run(self.endpoints['Conv_4'], feed_dict={self.inputs:inputs})
+      tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000)
+      plot_only = 6
+      low_d_weights = tsne.fit_transform(activations)
+      activation_images.append(self.plot_with_labels(low_d_weights, targets))
     else:
       raise IOError('MODEL: cant plot activations for this network')
-
-    for endpoint in endpoint_names:
-      tensors.append(self.endpoints[endpoint])
-    units = self.sess.run(tensors, feed_dict={self.inputs:inputs[0:1]})
-    for j, unit in enumerate(units):
-      filters = unit.shape[3]
-      fig = plt.figure(1, figsize=(15,15))
-      fig.suptitle(endpoint_names[j], fontsize=40)
-      n_columns = 6
-      n_rows = math.ceil(filters / n_columns) + 1
-      for i in range(filters):
-          plt.subplot(n_rows, n_columns, i+1)
-          #plt.title('Filter ' + str(i), fontdict={'fontsize':10})
-          plt.imshow(unit[0,:,:,i], interpolation="nearest", cmap="gray")
-          plt.axis('off')
-      #plt.show()
-      buf=self.fig2buf(fig)
-      activation_images.append(buf)
-      plt.clf()
-      plt.close()
-      #plt.matshow(buf[:,:,0], fignum=100, cmap=plt.cm.gray)
-      #plt.axis('off')
-      #plt.show()
-      #import pdb; pdb.set_trace()
     activation_images = np.asarray(activation_images)
     return activation_images
 
   def plot_depth(self, inputs, depth_targets):
     '''plot depth predictions and return np array as floating image'''
+    if not FLAGS.auxiliary_depth: raise IOError('can t plot depth predictions when auxiliary depth is False.')
     control, depths = self.forward(inputs, aux=True)
     n=3
     fig = plt.figure(1, figsize=(5,5))
@@ -370,7 +402,7 @@ class Model(object):
     self.add_summary_var("loss_val_depth")
     
     if FLAGS.plot_activations:
-      act_images = tf.placeholder(tf.float32, [None, 1500, 1500, 3])
+      act_images = tf.placeholder(tf.float32, [None, 500, 500, 3])
       tf.summary.image("conv_activations", act_images, max_outputs=4)
       self.summary_vars.append(act_images)
     

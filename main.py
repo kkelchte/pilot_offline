@@ -180,7 +180,7 @@ def main(_):
         ctr_loss.append(losses[1])
         if index == 1 and data_type=='val':
           if FLAGS.plot_activations:
-            activation_images = model.plot_activations(im_b)
+            activation_images = model.plot_activations(im_b, trgt_b)
           if FLAGS.plot_depth:
             depth_predictions = model.plot_depth(im_b, depth_b)
           if FLAGS.plot_histograms:
@@ -217,7 +217,7 @@ def main(_):
     # ----------- validate episode
     results = run_episode('val')
     sumvar.extend(results)
-    
+
     # ----------- write summary
     try:
       model.summarize(sumvar)
