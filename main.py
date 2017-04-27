@@ -191,7 +191,8 @@ def main(_):
       start_data_time = time.time()
     if len(tot_loss)==0:
       raise IOError('Running episode ',data_type,' failed on all batches of this episode.')  
-    print('>>{0}: data time {1}; calc time {2}'.format(data_type.upper(),print_dur(data_loading_time),print_dur(calculation_time)))
+    print('>>{0} [{1[2]}/{1[1]}_{1[3]:02d}:{1[4]:02d}]: data {2}; calc {3}'.format(data_type.upper(),tuple(time.localtime()[0:5]),
+      print_dur(data_loading_time),print_dur(calculation_time)))
     print('losses: tot {0:.3g}; ctrl {1:.3g}; depth {2:.3g}'.format(np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss)))
     sys.stdout.flush()
 
