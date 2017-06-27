@@ -1,4 +1,5 @@
 import tensorflow as tf
+import os
 # import tensorflow.contrib.losses as losses
 import tensorflow.contrib.slim as slim
 #from tensorflow.contrib.slim.nets import inception
@@ -23,15 +24,16 @@ tf.app.flags.DEFINE_float("weight_decay", 0.00001, "Weight decay of inception ne
 # Std of uniform initialization
 tf.app.flags.DEFINE_float("init_scale", 0.0027, "Std of uniform initialization")
 # Base learning rate
-tf.app.flags.DEFINE_float("learning_rate", 0.0001, "Start learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.01, "Start learning rate.")
 tf.app.flags.DEFINE_float("depth_weight", 0.01, "Define the weight applied to the depth values in the loss relative to the control loss.")
 # Specify where the Model, trained on ImageNet, was saved.
 tf.app.flags.DEFINE_string("model_path", 'depth_net_checkpoint/checkpoint', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # tf.app.flags.DEFINE_string("model_path", '/users/visics/kkelchte/tensorflow/models', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # Define the initializer
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
-tf.app.flags.DEFINE_string("checkpoint_path", '/esat/qayd/kkelchte/tensorflow/offline_log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
-tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
+# tf.app.flags.DEFINE_string("checkpoint_path", '/esat/qayd/kkelchte/tensorflow/offline_log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
+tf.app.flags.DEFINE_string("checkpoint_path", 'offline_esat_2_cont_mix_joint', "Specify the directory of the checkpoint of the earlier trained model.")
+tf.app.flags.DEFINE_boolean("continue_training", True, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
 tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
 tf.app.flags.DEFINE_boolean("freeze", False, "Specify whether feature extracting network should be frozen and only the logit scope should be trained.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")
@@ -64,7 +66,8 @@ class Model(object):
     
     if not FLAGS.continue_training:
       if FLAGS.model_path[0]!='/':
-        checkpoint_path = '/esat/qayd/kkelchte/tensorflow/offline_log/'+FLAGS.model_path
+        checkpoint_path = os.path.join(os.getenv('HOME'),'tensorflow/log',FLAGS.model_path)
+        # checkpoint_path = '/esat/qayd/kkelchte/tensorflow/offline_log/'+FLAGS.model_path
       else:
         checkpoint_path = FLAGS.model_path
       list_to_exclude = ["global_step"]
@@ -117,7 +120,8 @@ class Model(object):
     else: #If continue training
       variables_to_restore = slim.get_variables_to_restore()
       if FLAGS.checkpoint_path[0]!='/':
-        checkpoint_path = '/esat/qayd/kkelchte/tensorflow/offline_log/'+FLAGS.checkpoint_path
+        checkpoint_path = os.path.join(os.getenv('HOME'),'tensorflow/log',FLAGS.checkpoint_path)
+        # checkpoint_path = '/esat/qayd/kkelchte/tensorflow/offline_log/'+FLAGS.checkpoint_path
       else:
         checkpoint_path = FLAGS.checkpoint_path
       init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
@@ -179,7 +183,18 @@ class Model(object):
     with tf.device(self.device):
       self.targets = tf.placeholder(tf.float32, [None, self.output_size])
       # self.loss = losses.mean_squared_error(tf.clip_by_value(self.outputs,1e-10,1.0), self.targets)
-      self.loss = tf.losses.mean_squared_error(self.outputs, self.targets)
+      # in case target value is np.nan, put loss to zero
+      # otherwise in normal case take th mean squared error
+
+      # def f_no_loss(): return tf.constant(0, dtype=tf.float32)
+      # def f_loss(): return tf.losses.mean_squared_error(self.outputs, self.targets)
+      # self.loss = tf.cond(tf.equal(self.targets[0,0], 999), f_no_loss, f_loss)
+      
+      def f_no_loss(): return tf.zeros((FLAGS.batch_size,self.output_size)), tf.zeros((FLAGS.batch_size,self.output_size))
+      def f_loss(): return self.outputs, self.targets
+      input1, input2 = tf.cond(tf.equal(self.targets[0,0], 999), f_no_loss, f_loss)
+      self.loss = tf.losses.mean_squared_error(input1, input2)
+
       if FLAGS.auxiliary_depth:
         # self.depth_targets = tf.placeholder(tf.float32, [None,1,1,64])
         self.depth_targets = tf.placeholder(tf.float32, [None,55,74])
@@ -256,6 +271,7 @@ class Model(object):
     results = self.sess.run(tensors, feed_dict=feed_dict)
     control = results[0] # control always first, and train_op second
     losses = results[2:] # rest is losses
+
     # import pdb; pdb.set_trace()
     # plt.subplot(1,2, 1)
     # plt.imshow(depth_targets[0])
@@ -264,7 +280,6 @@ class Model(object):
     # plt.show()
     # import pdb; pdb.set_trace()
     return control, losses
-
   
   def get_endpoint_activations(self, inputs):
     '''Run forward through the network for this batch and return all activations
@@ -293,8 +308,6 @@ class Model(object):
     #buf = np.resize(buf,(500,500,1))
     return buf
 
-
-
   def plot_with_labels(self, low_d_weights, targets):
     assert low_d_weights.shape[0] >= len(targets), "More targets than weights"
     fig = plt.figure(figsize=(5,5))  #in inches
@@ -314,8 +327,6 @@ class Model(object):
     return buf
     # plt.show()
     # plt.savefig(filename)
-
-
 
   def plot_activations(self, inputs, targets=None):
     activation_images = []
@@ -347,6 +358,7 @@ class Model(object):
         activation_images.append(buf)
     # Plot using t-SNE
     elif FLAGS.network == 'depth':
+      print('shape inputs: {}'.format(inputs.shape))
       activations = self.sess.run(self.endpoints['Conv_4'], feed_dict={self.inputs:inputs})
       tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000)
       plot_only = 6

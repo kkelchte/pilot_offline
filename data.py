@@ -6,6 +6,8 @@ from os import listdir
 from os.path import isfile, join, isdir
 import time
 import random
+import h5py
+from math import floor
 
 from PIL import Image
 import scipy.io as sio
@@ -19,12 +21,14 @@ FLAGS = tf.app.flags.FLAGS
 # ===========================
 #   Data Parameters
 # ===========================
-tf.app.flags.DEFINE_string("dataset", "mix","pick the dataset in data_root from which your movies can be found.")
+tf.app.flags.DEFINE_string("dataset", "esat","pick the dataset in data_root from which your movies can be found.")
 tf.app.flags.DEFINE_integer("batch_size", 16, "The size of the minibatch used for training.")
-tf.app.flags.DEFINE_string("data_root", "/esat/qayd/kkelchte/pilot_data", "Define the root folder of the different datasets.")
+tf.app.flags.DEFINE_string("data_root", "/esat/qayd/kkelchte/docker_home/pilot_data", "Define the root folder of the different datasets.")
 tf.app.flags.DEFINE_integer("num_threads", 4, "The number of threads for loading one minibatch.")
 tf.app.flags.DEFINE_float("mean", 0, "Define the mean of the input data for centering around zero. Esat data:0.2623")
 tf.app.flags.DEFINE_float("std", 1, "Define the standard deviation of the data for normalization. Esat data:0.1565")
+tf.app.flags.DEFINE_boolean("joint_training", False, "Train the offline control jointly with the esat depth dataset.")
+tf.app.flags.DEFINE_string("esat_data_file", "/esat/qayd/kkelchte/pilot_data/esat_real_depth.hdf5", "The filename of the hdf5 esat dataset.")
 
 datasetdir = join(FLAGS.data_root, FLAGS.dataset)
 full_set = {}
@@ -43,23 +47,38 @@ def load_set(data_type):
     imgs_jpg=listdir(join(run_dir,'RGB'))
     # get list of all image numbers available in listdir
     num_imgs=sorted([int(im[0:-4]) for im in imgs_jpg])
+    assert len(num_imgs)!=0 , IOError('no images in {0}: {1}'.format(run_dir,len(imgs_jpg)))
     if not isfile(join(run_dir,'RGB','{0:010d}.jpg'.format(num_imgs[-1]))):
       print('ERROR:',run_dir,' imgnum: ',num_imgs[-1])
+    # parse control data  
     control_file = open(join(run_dir,'control_info.txt'),'r')
-    control_list = []
-    ind = 0
-    for ctr in control_file.readlines():
-      control_ind = int(ctr.strip().split(' ')[0])
-      control_val = float(ctr.strip().split(' ')[6])
-      if ind<len(num_imgs) and num_imgs[ind]==control_ind:
+    control_file_list = control_file.readlines()
+    while len(control_file_list[-1])<=1 : control_file_list=control_file_list[:-1]
+    # print(run_dir)
+    control_parsed = [(int(ctr.strip().split(' ')[0]),float(ctr.strip().split(' ')[6])) for ctr in control_file_list]
+    # import pdb; pdb.set_trace()
+    def sync_control():
+      control_list = []
+      corresponding_imgs = []
+      ctr_ind, ctr_val = control_parsed.pop(0)
+      for ni in num_imgs:
+        # print("ni: {}".format(ni))
+        while(ctr_ind < ni):
+          try:
+            ctr_ind, ctr_val = control_parsed.pop(0)
+            # print("ctr_ind: {}".format(ctr_ind))
+          except IndexError:
+            # print("return corresponding_imgs: {} \n control_list{}".format(corresponding_imgs, control_list))
+            return corresponding_imgs, control_list
         # clip at -1 and 1
-        if abs(control_val) > 1: control_val = np.sign(control_val)
-        control_list.append(control_val)
-        ind+=1
-        # print('added control ',control_val,' as target for ',control_ind)
-    # cut the images for which no control is saved, should only be the case of the last frame
-    num_imgs = num_imgs[:ind]
-    assert len(num_imgs) == len(control_list), "Lenght of number of images {0} is not equal to number of control {1}".format(len(num_imgs),len(control_list))
+        if abs(ctr_val) > 1: ctr_val = np.sign(ctr_val)
+        control_list.append(ctr_val)
+        corresponding_imgs.append(ni)
+        # print("append img {}: ctr num {}".format(ni, ctr_ind))
+      return corresponding_imgs, control_list
+    num_imgs, control_list = sync_control()
+    assert len(num_imgs) == len(control_list), "Length of number of images {0} is not equal to number of control {1}".format(len(num_imgs),len(control_list))
+    
     # Add depth links
     depth_list = [] 
     if FLAGS.auxiliary_depth:
@@ -82,7 +101,7 @@ def load_set(data_type):
   return set_list
 
 def prepare_data(size, size_depth=(55,74)):
-  global im_size, full_set, de_size
+  global im_size, full_set, de_size, esat_depth_file, esat_key, max_key
   '''Load lists of tuples refering to images from which random batches can be drawn'''
   # stime = time.time()
   train_set = load_set('train')
@@ -91,11 +110,19 @@ def prepare_data(size, size_depth=(55,74)):
   full_set={'train':train_set, 'val':val_set, 'test':test_set}
   im_size=size
   de_size = size_depth
+  if FLAGS.joint_training:
+    esat_depth_file=h5py.File(FLAGS.esat_data_file, 'r')
+    max_key = int(floor(esat_depth_file["depth"]["depth_data"].shape[2]/FLAGS.batch_size))
+    esat_key = 0
   # print('duration: ',time.time()-stime)
   # import pdb; pdb.set_trace()
   
 def generate_batch(data_type):
-  """ Generator object that gets a random batch when next() is called
+  global esat_key
+  """ 
+  input:
+    data_type: 'train', 'val' or 'test'
+  Generator object that gets a random batch when next() is called
   yields: 
   - index: of current batch relative to the data seen in this epoch.
   - ok: boolean that defines if batch was loaded correctly
@@ -114,40 +141,29 @@ def generate_batch(data_type):
   while b < number_of_batches:
     if b>0 and b%10==0:
       print('batch {0} of {1}'.format(b,number_of_batches))
+    if b>0 and b%5==0 and FLAGS.joint_training:
+      load_esat_depth = True
+    else:
+      load_esat_depth = False
     #print('batch ',cnt,' of ',number_of_batches)
     ok = True
-    # Single threaded implementation
-    if False:
-      im_b = []
-      trgt_b = []
-      for j in range(FLAGS.batch_size):
-        # choose random run:
-        run_ind = random.choice(range(len(data_set)))
-        # choose random image:
-        im_ind = random.choice(range(data_set[run_ind][1]))
-        # load image
-        img_file = join(data_set[run_ind][0],'RGB', '{0:010d}.jpg'.format(im_ind))
-        im = Image.open(img_file)
-        im = sm.imresize(im,im_size,'nearest')
-        im = im * 1/255.
-        im_b.append(im)
-        # load target
-        control_file = open(join(data_set[run_ind][0],'control_info.txt'),'r')
-        control_list = [ l[:-1] for l in control_file.readlines()]
-        # get the target yaw turn from the control and map between -1 and 1
-        control = max(min(1, control_list[im_ind].split(' ')[6]), -1)
-        trgt_b.append([control])
-        
-    else: #Multithreaded implementation
-      # im_b = np.zeros((FLAGS.batch_size,im_size[0],im_size[1],im_size[2])) #[] #list(range(FLAGS.batch_size)) #
-      # trgt_b = np.zeros((FLAGS.batch_size, 1)) #[] #list(range(FLAGS.batch_size)) #
-      # aux_b = np.zeros((FLAGS.batch_size,55,74))
-      # im_b = []
-      # trgt_b = []
-      # aux_b =[]
-      batch=[]
+    
+    if load_esat_depth:
+      print('-esat_depth_batch-')
+      start_i = esat_key*FLAGS.batch_size
+      end_i = (esat_key+1)*FLAGS.batch_size
+      im_batch = np.rollaxis(esat_depth_file["rgb"]["rgb_data"][:,:,:,start_i:end_i],3)
+      de_batch = np.rollaxis(esat_depth_file["depth"]["depth_data"][:,:,start_i:end_i],2)
+      batch = [(im_batch[i], 999, de_batch[i]) for i in range(FLAGS.batch_size)]
+      esat_key += 1
+      if esat_key >= max_key:
+        esat_key = 0
+      # import pdb; pdb.set_trace()
+    else: 
+      #Multithreaded implementation
       # sample indices from dataset
       # from which threads can start loading
+      batch=[]
       batch_indices = []
       # checklist keeps track for each batch whether all the loaded data was loaded correctly
       checklist = []
@@ -165,57 +181,26 @@ def generate_batch(data_type):
       def load_image_and_target(coord, batch_indices, batch, checklist):
         while not coord.should_stop():
           try:
-            # loc_ind = thread_indices.pop()
             # print('------------',loc_ind)
             loc_ind, run_ind, frame_ind = batch_indices.pop()
-            
-            # Print debug info:
-            # if FLAGS.auxiliary_depth:
-            #   print("--- Run: {0}, im: {1}, ctrl: {2}, depth: {3}".format(data_set[run_ind][0],data_set[run_ind][1][frame_ind],
-            #   data_set[run_ind][2][frame_ind],data_set[run_ind][3][frame_ind]))
-            # else:
-            #   print("--- Run: {0}, im: {1}, ctrl: {2}, depth: {3}".format(data_set[run_ind][0],data_set[run_ind][1][frame_ind],
-            #   data_set[run_ind][2][frame_ind]))
-            # get index of input image
-            # run_ind, frame_ind = batch_indices[loc_ind]
             # load image
             img_file = join(data_set[run_ind][0],'RGB', '{0:010d}.jpg'.format(data_set[run_ind][1][frame_ind]))
             im = Image.open(img_file)
             im = sm.imresize(im,im_size,'nearest').astype(float) #.astype(np.float32)
-            # im = sm.imresize(im,im_size,'nearest').astype(np.float32)
-            # im = im * 1/255.
             # center the data around zero with 1standard devation
             # with tool 'get_mean_variance.py' in tensorflow2/examples/tools
             im -= FLAGS.mean
             im = im*1/FLAGS.std
-            # im_b[loc_ind,:,:,:]=im
-            # im_b[loc_ind]=im
+            
             de = None          
             if FLAGS.auxiliary_depth:
               depth_file = join(data_set[run_ind][0],'Depth', '{0:010d}.jpg'.format(data_set[run_ind][3][frame_ind]))
               de = Image.open(depth_file)
               de = sm.imresize(de,de_size,'nearest')
               de = de * 1/255. * 5.
-              # de = de.astype(np.float32)
             # append rgb image, control and depth to batch
             batch.append((im, data_set[run_ind][2][frame_ind], de))
-            # import pdb; pdb.set_trace()
-            # # load target
-            # control_file = open(join(data_set[run_ind][0],'control_info.txt'),'r')
-            # # ! readlines() takes a long time...
-            # control_list = []
-            # for ctr in control_file.readlines():
-            #   control_list.append([float(e) for e in ctr.strip().split(' ')])
-            # control_ar=np.array(control_list)
-            # # get the target yaw turn from the control and map between -1 and 1
-            # #control = max(min(1, control_list[im_ind].split(' ')[6]), -1)
-            # control = float(control_ar[control_ar[:,0]==im_ind,6][0])
-            # print(control)
-            # import pdb; pdb.set_trace()
-            # # control = float(control_list[im_ind].split(' ')[6])
-            # if abs(control) > 1: control = np.sign(control)
-            # trgt_b[loc_ind, :]=[control]
-            # #trgt_b.append([control])
+            
             checklist.append(True)
           except IndexError as e:
             #print('batch_loaded, wait to stop', e)
@@ -238,31 +223,37 @@ def generate_batch(data_type):
     yield b, ok, batch
     
 #### FOR TESTING ONLY
-if __name__ == '__main__':
-  def print_dur(start_time):
+def print_dur(start_time):
     duration = (time.time()-start_time)
     m, s = divmod(duration, 60)
     h, m = divmod(m, 60)
     return "time: %dh:%02dm:%0.5fs" % (h, m, s)
-  FLAGS.auxiliary_depth = True
-  prepare_data((240,320,3))
-  start_time=time.time()
-  for index, ok, batch in generate_batch('train'):
-    print('b: ',index,' ok ',ok,' ',print_dur(start_time))
-    print 'RGB Image:'
-    print batch[0][0].shape
-    print type(batch[0][0][0,0,0])
-    print 'min: ',np.amin(batch[0][0]),' max: ',np.amax(batch[0][0])
-    print 'depth Image:'
-    print batch[0][2].shape
-    print type(batch[0][2][0,0])
-    print 'min: ',np.amin(batch[0][2]),' max: ',np.amax(batch[0][2])
-    import pdb; pdb.set_trace()
-    start_time=time.time()
   
-    # if not ok: print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!problem...')#print(imb.shape, trgtb.shape)
-    # #print imb.shape, trgtb.shape
-    # print trgtb
-    pass
-  print('loading time one episode: ', print_dur(start_time))
+if __name__ == '__main__':
+  FLAGS.auxiliary_depth = False
+  prepare_data((240,320,3))
+
+  # import pdb; pdb.set_trace()
+  print 'run_dir:'
+  full_set['train'][0][0]
+  print 'len images: {}'.format(len(full_set['train'][0][1]))
+  print 'len control: {}'.format(len(full_set['train'][0][2]))
+  print 'len depth: {}'.format(len(full_set['train'][0][3]))
+  
+  # start_time=time.time()
+  # for index, ok, batch in generate_batch('train'):
+  #   print('b: ',index,' ok ',ok,' ',print_dur(start_time))
+  #   print 'RGB Image:'
+  #   print batch[0][0].shape
+  #   print type(batch[0][0][0,0,0])
+  #   print 'min: ',np.amin(batch[0][0]),' max: ',np.amax(batch[0][0])
+  #   print 'depth Image:'
+  #   print batch[0][2].shape
+  #   print type(batch[0][2][0,0])
+  #   print 'min: ',np.amin(batch[0][2]),' max: ',np.amax(batch[0][2])
+  #   import pdb; pdb.set_trace()
+  #   start_time=time.time()
+
+  #   pass
+  # print('loading time one episode: ', print_dur(start_time))
   

@@ -33,7 +33,7 @@ FLAGS = tf.app.flags.FLAGS
 # ===========================
 #   Training Parameters
 # ===========================
-tf.app.flags.DEFINE_integer("max_episodes", 1001, "The maximum number of episodes (~runs through all the training data.)")
+tf.app.flags.DEFINE_integer("max_episodes", 100, "The maximum number of episodes (~runs through all the training data.)")
 
 # ===========================
 #   Utility Parameters
@@ -41,7 +41,8 @@ tf.app.flags.DEFINE_integer("max_episodes", 1001, "The maximum number of episode
 # Print output of ros verbose or not
 tf.app.flags.DEFINE_boolean("verbose", True, "Print output of ros verbose or not.")
 # Directory for storing tensorboard summary results
-tf.app.flags.DEFINE_string("summary_dir", '/esat/qayd/kkelchte/tensorflow/offline_log/', "Choose the directory to which tensorflow should save the summaries.")
+tf.app.flags.DEFINE_string("summary_dir", 'tensorflow/log/', "Choose the directory to which tensorflow should save the summaries.")
+# tf.app.flags.DEFINE_string("summary_dir", '/esat/qayd/kkelchte/tensorflow/offline_log/', "Choose the directory to which tensorflow should save the summaries.")
 # Add log_tag to overcome overwriting of other log files
 tf.app.flags.DEFINE_string("log_tag", 'testing', "Add log_tag to overcome overwriting of other log files.")
 # Choose to run on gpu or cpu
@@ -83,18 +84,22 @@ def print_dur(duration_time):
 # Use the main method for starting the training procedure and closing it in the end.
 def main(_):
   #Check log folders and if necessary remove:
+  summary_dir = os.path.join(os.getenv('HOME'),FLAGS.summary_dir)
+  # summary_dir = FLAGS.summary_dir
+  print("summary dir: {}".format(summary_dir))
+  #Check log folders and if necessary remove:
   if FLAGS.log_tag == 'testing' or FLAGS.owr:
-    if os.path.isdir(FLAGS.summary_dir+FLAGS.log_tag):
-      shutil.rmtree(FLAGS.summary_dir+FLAGS.log_tag,ignore_errors=True)
+    if os.path.isdir(summary_dir+FLAGS.log_tag):
+      shutil.rmtree(summary_dir+FLAGS.log_tag,ignore_errors=False)
   #else :
   #  if os.path.isdir(FLAGS.summary_dir+FLAGS.log_tag):
   #    raise NameError( 'Logfolder already exists, overwriting alert: '+ FLAGS.summary_dir+FLAGS.log_tag ) 
   try:
-    os.mkdir(FLAGS.summary_dir+FLAGS.log_tag)
+    os.mkdir(summary_dir+FLAGS.log_tag)
   except OSError:
     pass
   else: #only save config if new directory was made
-    save_config(FLAGS.summary_dir+FLAGS.log_tag)
+    save_config(summary_dir+FLAGS.log_tag)
 
   # some startup settings
   np.random.seed(FLAGS.random_seed)
@@ -126,7 +131,7 @@ def main(_):
   config.gpu_options.allow_growth = True
   sess = tf.Session(config=config)
   model = Model(sess, state_dim, action_dim, bound=FLAGS.action_bound)
-  writer = tf.summary.FileWriter(FLAGS.summary_dir+FLAGS.log_tag, sess.graph)
+  writer = tf.summary.FileWriter(summary_dir+FLAGS.log_tag, sess.graph)
   model.writer = writer
   #model=None
   
@@ -134,7 +139,7 @@ def main(_):
     print('You pressed Ctrl+C!')
     #save checkpoint?
     print('saving checkpoints')
-    model.save(FLAGS.summary_dir+FLAGS.log_tag)
+    model.save(summary_dir+FLAGS.log_tag)
     #rosinterface.close()
     sess.close()
     print('done.')
@@ -177,7 +182,8 @@ def main(_):
             _, losses = model.forward(im_b, targets=trgt_b, depth_targets=depth_b)
           dep_loss.append(losses[2])
         tot_loss.append(losses[0])
-        ctr_loss.append(losses[1])
+        if losses[1] != 0: #in case the control loss is zero it means there was no control target.
+          ctr_loss.append(losses[1])
         if index == 1 and data_type=='val':
           if FLAGS.plot_activations:
             activation_images = model.plot_activations(im_b, trgt_b)
@@ -227,7 +233,7 @@ def main(_):
     # write checkpoint every x episodes
     if (ep%20==0 and ep!=0) or ep==(FLAGS.max_episodes-1):
       print('saved checkpoint')
-      model.save(FLAGS.summary_dir+FLAGS.log_tag)
+      model.save(summary_dir+FLAGS.log_tag)
   # ------------ test
   results = run_episode('test')  
   
