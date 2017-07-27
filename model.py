@@ -26,7 +26,7 @@ tf.app.flags.DEFINE_float("weight_decay", 0.00001, "Weight decay of inception ne
 # Std of uniform initialization
 tf.app.flags.DEFINE_float("init_scale", 0.0027, "Std of uniform initialization")
 # Base learning rate
-tf.app.flags.DEFINE_float("learning_rate", 0.0001, "Start learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.1, "Start learning rate.")
 tf.app.flags.DEFINE_float("depth_weight", 0.01, "Define the weight applied to the depth values in the loss relative to the control loss.")
 # Specify where the Model, trained on ImageNet, was saved.
 tf.app.flags.DEFINE_string("model_path", 'depth_net_checkpoint', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
@@ -171,7 +171,7 @@ class Model(object):
           #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
           self.outputs, self.endpoints = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, 
             is_training=True, dropout_keep_prob=FLAGS.dropout_keep_prob)
-          # import pdb; pdb.set_trace()
+
           self.auxlogits = self.endpoints['aux_fully_connected_1']
           self.controls, _ = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, is_training=False, reuse = True)
           self.pred_depth = _['aux_fully_connected_1']
