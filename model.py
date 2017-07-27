@@ -1,3 +1,4 @@
+
 import tensorflow as tf
 import os
 # import tensorflow.contrib.losses as losses
@@ -16,6 +17,7 @@ import math
 
 
 import depth_estim
+import mobile_net
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -31,25 +33,23 @@ tf.app.flags.DEFINE_string("model_path", 'depth_net_checkpoint/checkpoint', "Spe
 # tf.app.flags.DEFINE_string("model_path", '/users/visics/kkelchte/tensorflow/models', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # Define the initializer
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
-# tf.app.flags.DEFINE_string("checkpoint_path", '/esat/qayd/kkelchte/tensorflow/offline_log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
 tf.app.flags.DEFINE_string("checkpoint_path", 'offline_esat_2_cont_mix_joint', "Specify the directory of the checkpoint of the earlier trained model.")
 tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
 tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
 tf.app.flags.DEFINE_boolean("freeze", False, "Specify whether feature extracting network should be frozen and only the logit scope should be trained.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")
 tf.app.flags.DEFINE_boolean("plot_activations", False, "Specify whether the activations are weighted.")
-tf.app.flags.DEFINE_float("dropout_keep_prob", 1.0, "Specify the probability of dropout to keep the activation.")
+tf.app.flags.DEFINE_float("dropout_keep_prob", 0.9, "Specify the probability of dropout to keep the activation.")
 tf.app.flags.DEFINE_integer("clip_grad", 0, "Specify the max gradient norm: default 0, recommended 4.")
-tf.app.flags.DEFINE_string("optimizer", 'adam', "Specify optimizer, options: adam, adadelta")
+tf.app.flags.DEFINE_string("optimizer", 'adadelta', "Specify optimizer, options: adam, adadelta")
 tf.app.flags.DEFINE_boolean("plot_histograms", True, "Specify whether to plot histograms of the weights.")
-
 
 """
 Build basic NN model
 """
 class Model(object):
  
-  def __init__(self,  session, input_size, output_size, prefix='model', device='/gpu:0', bound=1):
+  def __init__(self,  session, input_size, output_size, prefix='model', device='/gpu:0', bound=1, depth_input_size=(55,74)):
     '''initialize model
     '''
     self.sess = session
@@ -78,6 +78,8 @@ class Model(object):
       if FLAGS.exclude_from_layer <= 5:
         list_to_exclude.extend(["InceptionV3/Mixed_5a", "InceptionV3/Mixed_5b", "InceptionV3/Mixed_5c", "InceptionV3/Mixed_5d"])
       list_to_exclude.extend(["InceptionV3/Logits", "InceptionV3/AuxLogits"])
+      list_to_exclude.append("MobilenetV1/control")
+      list_to_exclude.append("MobilenetV1/aux_depth")
 
       if FLAGS.network == 'depth':
         # control layers are not in pretrained depth checkpoint
@@ -87,7 +89,8 @@ class Model(object):
           'Depth_Estimate_V1/control/control_2/biases'])
       #print list_to_exclude
       variables_to_restore = slim.get_variables_to_restore(exclude=list_to_exclude)
-      if FLAGS.network == 'depth':
+      # remap only in case of using Toms original network
+      if FLAGS.network == 'depth' and checkpoint_path == os.path.join(os.getenv('HOME'),'tensorflow/log','depth_net_checkpoint'):
         variables_to_restore = {
           'Conv/weights':slim.get_unique_variable('Depth_Estimate_V1/Conv/weights'),
           'Conv/biases':slim.get_unique_variable('Depth_Estimate_V1/Conv/biases'),
@@ -116,21 +119,25 @@ class Model(object):
           'fully_connected_1/weights':slim.get_unique_variable('Depth_Estimate_V1/fully_connected_1/weights'),
           'fully_connected_1/biases':slim.get_unique_variable('Depth_Estimate_V1/fully_connected_1/biases')
           }
-      init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
     else: #If continue training
       variables_to_restore = slim.get_variables_to_restore()
       if FLAGS.checkpoint_path[0]!='/':
         checkpoint_path = os.path.join(os.getenv('HOME'),'tensorflow/log',FLAGS.checkpoint_path)
-        # checkpoint_path = '/esat/qayd/kkelchte/tensorflow/offline_log/'+FLAGS.checkpoint_path
       else:
         checkpoint_path = FLAGS.checkpoint_path
-      init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
+      
+    # get latest folder out of training directory if there is no checkpoint file
+    if not os.path.isfile(checkpoint_path+'/checkpoint'):
+      checkpoint_path = checkpoint_path+'/'+[mpath for mpath in sorted(os.listdir(checkpoint_path)) if os.path.isdir(checkpoint_path+'/'+mpath) and not mpath[-3:]=='val' and os.path.isfile(checkpoint_path+'/'+mpath+'/checkpoint')][-1]
+    print('checkpoint: {}'.format(checkpoint_path))
+    init_assign_op, init_feed_dict = slim.assign_from_checkpoint(tf.train.latest_checkpoint(checkpoint_path), variables_to_restore)
     
     # create saver for checkpoints
     self.saver = tf.train.Saver(keep_checkpoint_every_n_hours=1, max_to_keep=5)
     
     # Add the loss function to the graph.
     self.define_loss()
+
     
     # Define the training op based on the total loss
     self.define_train()
@@ -158,6 +165,17 @@ class Model(object):
           #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
           self.outputs, self.endpoints = inception.inception_v3(self.inputs, num_classes=self.output_size, is_training=True)   
           self.controls, _ = inception.inception_v3(self.inputs, num_classes=self.output_size, is_training=False)
+      elif FLAGS.network=='mobile':
+        with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(weight_decay=FLAGS.weight_decay,
+                             stddev=FLAGS.init_scale)):
+          #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
+          self.outputs, self.endpoints = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, 
+            is_training=True, dropout_keep_prob=FLAGS.dropout_keep_prob)
+
+          self.auxlogits = self.endpoints['aux_fully_connected_1']
+          self.controls, _ = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, is_training=False, reuse = True)
+          self.pred_depth = _['aux_fully_connected_1']
+      
       elif FLAGS.network=='depth':
         with slim.arg_scope(depth_estim.arg_scope(weight_decay=FLAGS.weight_decay, stddev=FLAGS.init_scale)):
           # Define model with SLIM, second returned value are endpoints to get activations of certain nodes
@@ -165,31 +183,21 @@ class Model(object):
           self.auxlogits = self.endpoints['fully_connected_1']
           self.controls, _ = depth_estim.depth_estim_v1(self.inputs, num_classes=self.output_size, is_training=False, reuse = True)
           self.pred_depth = _['fully_connected_1']
-          if FLAGS.plot_histograms:
-            for v in tf.global_variables():
-              # print v.name
-              # import pdb; pdb.set_trace()
-              tf.summary.histogram(v.name.split(':')[0], v)
-          
       else:
-        raise(IOError('Network flag is unknown:',FLAGS.network))
+        raise NameError( '[model] Network is unknown: ', FLAGS.network)
+      if FLAGS.plot_histograms:
+        for v in tf.global_variables():
+          tf.summary.histogram(v.name.split(':')[0], v)
       if(self.bound!=1 or self.bound!=0):
-        # self.outputs = tf.mul(self.outputs, self.bound) # Scale output to -bound to bound 
-        self.outputs = tf.multiply(self.outputs, self.bound) # Scale output to -bound to bound 
-  
+        # self.outputs = tf.mul(self.outputs, self.bound) # Scale output to -bound to bound
+        self.outputs = tf.multiply(self.outputs, self.bound) # Scale output to -bound to bound
+
   def define_loss(self):
     '''tensor for calculating the loss
     '''
     with tf.device(self.device):
       self.targets = tf.placeholder(tf.float32, [None, self.output_size])
       # self.loss = losses.mean_squared_error(tf.clip_by_value(self.outputs,1e-10,1.0), self.targets)
-      # in case target value is np.nan, put loss to zero
-      # otherwise in normal case take th mean squared error
-
-      # def f_no_loss(): return tf.constant(0, dtype=tf.float32)
-      # def f_loss(): return tf.losses.mean_squared_error(self.outputs, self.targets)
-      # self.loss = tf.cond(tf.equal(self.targets[0,0], 999), f_no_loss, f_loss)
-      
       def f_no_loss(): return tf.zeros((FLAGS.batch_size,self.output_size)), tf.zeros((FLAGS.batch_size,self.output_size))
       def f_loss(): return self.outputs, self.targets
       input1, input2 = tf.cond(tf.equal(self.targets[0,0], 999), f_no_loss, f_loss)
@@ -214,6 +222,8 @@ class Model(object):
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr) 
       elif FLAGS.optimizer == 'adadelta':
         self.optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr) 
+      elif FLAGS.optimizer == 'gradientdescent':
+        self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.lr) 
       else:
         raise IOError('Model: Unknown optimizer.')
       # Create the train_op and scale the gradients by providing a map from variable
@@ -362,6 +372,7 @@ class Model(object):
       activations = self.sess.run(self.endpoints['Conv_4'], feed_dict={self.inputs:inputs})
       tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000)
       plot_only = 6
+      print('shape of activations: {}'.format(activations.shape))
       low_d_weights = tsne.fit_transform(activations)
       activation_images.append(self.plot_with_labels(low_d_weights, targets))
     else:
@@ -397,13 +408,13 @@ class Model(object):
     #self.saver.save(self.sess, logfolder+'/my-model', global_step=run)
     self.saver.save(self.sess, logfolder+'/my-model', global_step=tf.train.global_step(self.sess, self.global_step))
     #self.saver.save(self.sess, logfolder+'/my-model')
-  
+
   def add_summary_var(self, name):
     var_name = tf.Variable(0.)
     tf.summary.scalar(name, var_name)
     self.summary_vars.append(var_name)
-
-  def build_summaries(self):
+  
+  def build_summaries(self): 
     self.summary_vars = []
     self.add_summary_var("loss_train_total")
     self.add_summary_var("loss_train_control")
@@ -429,7 +440,7 @@ class Model(object):
         activations[ep]=tf.placeholder(tf.float32,[None, 1])
         tf.summary.histogram('activations_{}'.format(ep), activations[ep])
         self.summary_vars.append(activations[ep])
-    
+
     self.summary_ops = tf.summary.merge_all()
 
   def summarize(self, sumvars):

@@ -15,6 +15,7 @@ from tensorflow.python.ops import random_ops
 import numpy as np
 from model import Model
 import data
+import mobile_net
 
 import sys, os, os.path
 import subprocess
@@ -53,7 +54,7 @@ tf.app.flags.DEFINE_integer("random_seed", 123, "Set the random seed to get simi
 tf.app.flags.DEFINE_boolean("owr", False, "Overwrite existing logfolder when it is not testing.")
 tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the actions can go. Default: [-1:1].")
 
-tf.app.flags.DEFINE_string("network", 'depth', "Define the type of network: inception / depth.")
+tf.app.flags.DEFINE_string("network", 'depth', "Define the type of network: inception / depth / mobile.")
 tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether the horizontal line of depth is predicted as auxiliary task in the feature.")
 tf.app.flags.DEFINE_boolean("plot_depth", False, "Specify whether the depth predictions is saved as images.")
 
@@ -112,6 +113,8 @@ def main(_):
     state_dim = [1, fc_control.fc_control_v1.input_size]
   elif FLAGS.network =='depth':
     state_dim = depth_estim.depth_estim_v1.input_size
+  elif FLAGS.network =='mobile':
+    state_dim = [1, mobile_net.mobilenet_v1.default_image_size, mobile_net.mobilenet_v1.default_image_size, 3]  
   else:
     raise NameError( 'Network is unknown: ', FLAGS.network)
   # state_dim = inception.inception_v3.default_image_size
