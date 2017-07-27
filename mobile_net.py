@@ -300,10 +300,18 @@ def mobilenet_v1(inputs,
                                           min_depth=min_depth,
                                           depth_multiplier=depth_multiplier,
                                           conv_defs=conv_defs)
-      
+      kernel_size = _reduced_kernel_size_for_small_input(net, [7, 7])
+      net = slim.avg_pool2d(net, kernel_size, padding='VALID',
+                            scope='AvgPool_1a')
+      end_points['AvgPool_1a'] = net
+
       with tf.variable_scope('aux_depth'):
+        end_point = 'prelogit'
+        prelogit = tf.reshape(net,[-1,1024])
+        end_points[end_point] = prelogit
+
         end_point = 'aux_fully_connected'
-        aux_logits=slim.fully_connected(net, 4096, tf.nn.relu)
+        aux_logits=slim.fully_connected(prelogit, 4096, tf.nn.relu)
         end_points[end_point] = aux_logits
         
         end_point = 'aux_fully_connected_1'
@@ -311,14 +319,8 @@ def mobilenet_v1(inputs,
         # output height 55 width 74
         aux_logits=tf.reshape(aux_logits, [-1, 55, 74])
         end_points[end_point] = aux_logits
-        
-      # adjust by me for training only final control layers
-      # with tf.variable_scope('Logits'):
-      with tf.variable_scope('control'):
-        kernel_size = _reduced_kernel_size_for_small_input(net, [7, 7])
-        net = slim.avg_pool2d(net, kernel_size, padding='VALID',
-                              scope='AvgPool_1a')
-        end_points['AvgPool_1a'] = net
+
+      with tf.variable_scope('control'): 
         # 1 x 1 x 1024
         net = slim.dropout(net, keep_prob=dropout_keep_prob, scope='Dropout_1b')
         logits = slim.conv2d(net, num_classes, [1, 1], activation_fn=None,
