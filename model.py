@@ -33,7 +33,7 @@ tf.app.flags.DEFINE_string("model_path", 'depth_net_checkpoint/checkpoint', "Spe
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
 # tf.app.flags.DEFINE_string("checkpoint_path", '/esat/qayd/kkelchte/tensorflow/offline_log/inception/', "Specify the directory of the checkpoint of the earlier trained model.")
 tf.app.flags.DEFINE_string("checkpoint_path", 'offline_esat_2_cont_mix_joint', "Specify the directory of the checkpoint of the earlier trained model.")
-tf.app.flags.DEFINE_boolean("continue_training", True, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
+tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
 tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
 tf.app.flags.DEFINE_boolean("freeze", False, "Specify whether feature extracting network should be frozen and only the logit scope should be trained.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")

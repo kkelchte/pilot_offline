@@ -95,10 +95,10 @@ def main(_):
   #  if os.path.isdir(FLAGS.summary_dir+FLAGS.log_tag):
   #    raise NameError( 'Logfolder already exists, overwriting alert: '+ FLAGS.summary_dir+FLAGS.log_tag ) 
   try:
-    os.mkdir(summary_dir+FLAGS.log_tag)
+    os.makedirs(summary_dir+FLAGS.log_tag)
   except OSError:
     pass
-  else: #only save config if new directory was made
+  else:
     save_config(summary_dir+FLAGS.log_tag)
 
   # some startup settings
