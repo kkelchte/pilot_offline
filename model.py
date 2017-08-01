@@ -44,6 +44,7 @@ tf.app.flags.DEFINE_integer("clip_grad", 0, "Specify the max gradient norm: defa
 tf.app.flags.DEFINE_string("optimizer", 'adadelta', "Specify optimizer, options: adam, adadelta")
 tf.app.flags.DEFINE_boolean("plot_histograms", True, "Specify whether to plot histograms of the weights.")
 
+
 """
 Build basic NN model
 """
@@ -80,6 +81,7 @@ class Model(object):
       list_to_exclude.extend(["InceptionV3/Logits", "InceptionV3/AuxLogits"])
       list_to_exclude.append("MobilenetV1/control")
       list_to_exclude.append("MobilenetV1/aux_depth")
+      list_to_exclude.append("concatenated_control")
 
       if FLAGS.network == 'depth':
         # control layers are not in pretrained depth checkpoint
@@ -168,13 +170,38 @@ class Model(object):
       elif FLAGS.network=='mobile':
         with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(weight_decay=FLAGS.weight_decay,
                              stddev=FLAGS.init_scale)):
-          #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
-          self.outputs, self.endpoints = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, 
-            is_training=True, dropout_keep_prob=FLAGS.dropout_keep_prob)
+          if FLAGS.n_fc:
+            self.inputs = tf.placeholder(tf.float32, shape = (self.input_size[0],self.input_size[1],self.input_size[2],FLAGS.n_frames*self.input_size[3]))
+            def feature_extract(is_training=True):
+              logits = []
+              for i in range(FLAGS.n_frames):
+                # print('i',i)
+                _, self.endpoints = mobile_net.mobilenet_v1(self.inputs[:,:,:,i*3:(i+1)*3], num_classes=self.output_size, 
+                  is_training=is_training, reuse= (i!=0 and is_training) or not is_training)
+                logits.append(self.endpoints['AvgPool_1a'])
+                # auxiliary depth prediction is each time overwritten so only last one is returned
+                # this is relevant for choosing the auxiliary target value!
+                aux_depth = self.endpoints['aux_fully_connected_1']
 
-          self.auxlogits = self.endpoints['aux_fully_connected_1']
-          self.controls, _ = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, is_training=False, reuse = True)
-          self.pred_depth = _['aux_fully_connected_1']
+              with tf.variable_scope('concatenated_control', reuse=not is_training): 
+                logits=tf.concat(logits, axis=3)
+                # logits=tf.reshape(np.concatenate(logits, axis=3), [-1, 1024*FLAGS.n_frames])
+                if is_training:
+                  logits = slim.dropout(logits, keep_prob=FLAGS.dropout_keep_prob, scope='Dropout_1b')
+                logits = slim.conv2d(logits, 1, [1, 1], activation_fn=None,
+                                     normalizer_fn=None, scope='Conv2d_1c_1x1')
+                logits = tf.squeeze(logits, [1, 2], name='SpatialSqueeze')
+                outputs = tf.contrib.layers.softmax(logits, scope='Predictions')
+              return outputs, aux_depth
+            self.outputs, self.auxlogits = feature_extract(True)
+            self.controls, self.pred_depth = feature_extract(False)
+          else:  
+            #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
+            self.outputs, self.endpoints = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, 
+              is_training=True, dropout_keep_prob=FLAGS.dropout_keep_prob)
+            self.auxlogits = self.endpoints['aux_fully_connected_1']
+            self.controls, _ = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, is_training=False, reuse = True)
+            self.pred_depth = _['aux_fully_connected_1']
       
       elif FLAGS.network=='depth':
         with slim.arg_scope(depth_estim.arg_scope(weight_decay=FLAGS.weight_decay, stddev=FLAGS.init_scale)):

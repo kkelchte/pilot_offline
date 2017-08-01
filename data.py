@@ -175,6 +175,8 @@ def generate_batch(data_type):
         run_ind = random.choice(range(len(data_set)))
         # choose random index over image numbers:
         frame_ind = random.choice(range(len(data_set[run_ind][1])))
+        if FLAGS.n_fc:
+          frame_ind = random.choice(range(len(data_set[run_ind][1])-FLAGS.n_frames))
         batch_indices.append((batch_num, run_ind, frame_ind))
       # print("picking random indices duration: ",time.time()-stime)
       # import pdb; pdb.set_trace()
@@ -183,21 +185,32 @@ def generate_batch(data_type):
           try:
             # print('------------',loc_ind)
             loc_ind, run_ind, frame_ind = batch_indices.pop()
-            # load image
-            img_file = join(data_set[run_ind][0],'RGB', '{0:010d}.jpg'.format(data_set[run_ind][1][frame_ind]))
-            im = Image.open(img_file)
-            im = sm.imresize(im,im_size,'nearest').astype(float) #.astype(np.float32)
-            # center the data around zero with 1standard devation
-            # with tool 'get_mean_variance.py' in tensorflow2/examples/tools
-            im -= FLAGS.mean
-            im = im*1/FLAGS.std
+            def load_rgb_depth_image(run_ind, frame_ind):
+              # load image
+              img_file = join(data_set[run_ind][0],'RGB', '{0:010d}.jpg'.format(data_set[run_ind][1][frame_ind]))
+              img = Image.open(img_file)
+              img = sm.imresize(img,im_size,'nearest').astype(float) #.astype(np.float32)
+              # center the data around zero with 1standard devation
+              # with tool 'get_mean_variance.py' in tensorflow2/examples/tools
+              img -= FLAGS.mean
+              img = img*1/FLAGS.std
+              
+              de = None          
+              if FLAGS.auxiliary_depth:
+                depth_file = join(data_set[run_ind][0],'Depth', '{0:010d}.jpg'.format(data_set[run_ind][3][frame_ind]))
+                de = Image.open(depth_file)
+                de = sm.imresize(de,de_size,'nearest')
+                de = de * 1/255. * 5.
+              return img, de
             
-            de = None          
-            if FLAGS.auxiliary_depth:
-              depth_file = join(data_set[run_ind][0],'Depth', '{0:010d}.jpg'.format(data_set[run_ind][3][frame_ind]))
-              de = Image.open(depth_file)
-              de = sm.imresize(de,de_size,'nearest')
-              de = de * 1/255. * 5.
+            if FLAGS.n_fc:
+              ims = []
+              for frame in range(FLAGS.n_frames):
+                image, de = load_rgb_depth_image(run_ind, frame_ind+frame) # target depth (de) is each time overwritten
+                ims.append(image)
+              im = np.concatenate(ims, axis=2)
+            else:
+              im, de = load_rgb_depth_image(run_ind, frame_ind)
             # append rgb image, control and depth to batch
             batch.append((im, data_set[run_ind][2][frame_ind], de))
             

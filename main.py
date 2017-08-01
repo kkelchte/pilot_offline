@@ -16,17 +16,16 @@ import numpy as np
 from model import Model
 import data
 import mobile_net
-
+import depth_estim
 import sys, os, os.path
 import subprocess
 import shutil
 import time
 import signal
 
-import depth_estim
-
 # Block all the ugly printing...
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -57,6 +56,8 @@ tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the a
 tf.app.flags.DEFINE_string("network", 'depth', "Define the type of network: inception / depth / mobile.")
 tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether the horizontal line of depth is predicted as auxiliary task in the feature.")
 tf.app.flags.DEFINE_boolean("plot_depth", False, "Specify whether the depth predictions is saved as images.")
+tf.app.flags.DEFINE_boolean("n_fc", False, "In case of True, prelogit features are concatenated before feeding to the fully connected layers.")
+tf.app.flags.DEFINE_integer("n_frames", 3, "Specify the amount of frames concatenated in case of n_fc.")
 
 # ===========================
 #   Save settings
@@ -166,6 +167,7 @@ def main(_):
     ctr_loss=[]
     dep_loss=[]
     for index, ok, batch in data.generate_batch(data_type):
+      # import pdb; pdb.set_trace()
       data_loading_time+=(time.time()-start_data_time)
       start_calc_time=time.time()
       if ok:
