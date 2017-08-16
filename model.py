@@ -5,6 +5,9 @@ import os
 import tensorflow.contrib.slim as slim
 #from tensorflow.contrib.slim.nets import inception
 import inception
+import depth_estim
+import mobile_net
+
 from tensorflow.contrib.slim import model_analyzer as ma
 from tensorflow.python.ops import variables as tf_variables
 
@@ -16,8 +19,6 @@ import numpy as np
 import math
 
 
-import depth_estim
-import mobile_net
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -29,7 +30,7 @@ tf.app.flags.DEFINE_float("init_scale", 0.0027, "Std of uniform initialization")
 tf.app.flags.DEFINE_float("learning_rate", 0.1, "Start learning rate.")
 tf.app.flags.DEFINE_float("depth_weight", 0.01, "Define the weight applied to the depth values in the loss relative to the control loss.")
 # Specify where the Model, trained on ImageNet, was saved.
-tf.app.flags.DEFINE_string("model_path", 'depth_net_checkpoint', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
+tf.app.flags.DEFINE_string("model_path", 'mobilenet', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # tf.app.flags.DEFINE_string("model_path", '/users/visics/kkelchte/tensorflow/models', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # Define the initializer
 #tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
@@ -42,7 +43,7 @@ tf.app.flags.DEFINE_boolean("plot_activations", False, "Specify whether the acti
 tf.app.flags.DEFINE_float("dropout_keep_prob", 0.9, "Specify the probability of dropout to keep the activation.")
 tf.app.flags.DEFINE_integer("clip_grad", 0, "Specify the max gradient norm: default 0, recommended 4.")
 tf.app.flags.DEFINE_string("optimizer", 'adadelta', "Specify optimizer, options: adam, adadelta")
-tf.app.flags.DEFINE_boolean("plot_histograms", True, "Specify whether to plot histograms of the weights.")
+tf.app.flags.DEFINE_boolean("plot_histograms", False, "Specify whether to plot histograms of the weights.")
 
 
 """
@@ -190,8 +191,7 @@ class Model(object):
                   logits = slim.dropout(logits, keep_prob=FLAGS.dropout_keep_prob, scope='Dropout_1b')
                 logits = slim.conv2d(logits, 1, [1, 1], activation_fn=None,
                                      normalizer_fn=None, scope='Conv2d_1c_1x1')
-                logits = tf.squeeze(logits, [1, 2], name='SpatialSqueeze')
-                outputs = tf.contrib.layers.softmax(logits, scope='Predictions')
+                outputs = tf.squeeze(logits, [1, 2], name='SpatialSqueeze')
               return outputs, aux_depth
             self.outputs, self.auxlogits = feature_extract(True)
             self.controls, self.pred_depth = feature_extract(False)

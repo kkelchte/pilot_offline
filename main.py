@@ -29,10 +29,9 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 FLAGS = tf.app.flags.FLAGS
 
-
-# ===========================
+# ==========================
 #   Training Parameters
-# ===========================
+# ==========================
 tf.app.flags.DEFINE_integer("max_episodes", 100, "The maximum number of episodes (~runs through all the training data.)")
 
 # ===========================
@@ -52,8 +51,7 @@ tf.app.flags.DEFINE_integer("random_seed", 123, "Set the random seed to get simi
 # Overwrite existing logfolder
 tf.app.flags.DEFINE_boolean("owr", False, "Overwrite existing logfolder when it is not testing.")
 tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the actions can go. Default: [-1:1].")
-
-tf.app.flags.DEFINE_string("network", 'depth', "Define the type of network: inception / depth / mobile.")
+tf.app.flags.DEFINE_string("network", 'mobile', "Define the type of network: inception / depth / mobile.")
 tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether the horizontal line of depth is predicted as auxiliary task in the feature.")
 tf.app.flags.DEFINE_boolean("plot_depth", False, "Specify whether the depth predictions is saved as images.")
 tf.app.flags.DEFINE_boolean("n_fc", False, "In case of True, prelogit features are concatenated before feeding to the fully connected layers.")
@@ -93,9 +91,6 @@ def main(_):
   if FLAGS.log_tag == 'testing' or FLAGS.owr:
     if os.path.isdir(summary_dir+FLAGS.log_tag):
       shutil.rmtree(summary_dir+FLAGS.log_tag,ignore_errors=False)
-  #else :
-  #  if os.path.isdir(FLAGS.summary_dir+FLAGS.log_tag):
-  #    raise NameError( 'Logfolder already exists, overwriting alert: '+ FLAGS.summary_dir+FLAGS.log_tag ) 
   try:
     os.makedirs(summary_dir+FLAGS.log_tag)
   except OSError:
@@ -106,8 +101,8 @@ def main(_):
   # some startup settings
   np.random.seed(FLAGS.random_seed)
   tf.set_random_seed(FLAGS.random_seed)
-  
-  #define the size of the network input 
+    
+  #define the size of the network input
   if FLAGS.network == 'inception':
     state_dim = [1, inception.inception_v3.default_image_size, inception.inception_v3.default_image_size, 3]
   elif FLAGS.network == 'fc_control':
@@ -118,18 +113,18 @@ def main(_):
     state_dim = [1, mobile_net.mobilenet_v1.default_image_size, mobile_net.mobilenet_v1.default_image_size, 3]  
   else:
     raise NameError( 'Network is unknown: ', FLAGS.network)
-  # state_dim = inception.inception_v3.default_image_size
+    
   action_dim = 1 #initially only turn and go straight
   
   print( "Number of State Dimensions:", state_dim)
   print( "Number of Action Dimensions:", action_dim)
   print( "Action bound:", FLAGS.action_bound)
-  
-  tf.logging.set_verbosity(tf.logging.DEBUG)
-  
+  # import pdb; pdb.set_trace()
+  # tf.logging.set_verbosity(tf.logging.DEBUG)
   # inputs=random_ops.random_uniform(state_dim)
   # targets=random_ops.random_uniform((1,action_dim))
   # depth_targets=random_ops.random_uniform((1,1,1,64))
+  
   gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
   config=tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
   config.gpu_options.allow_growth = True
@@ -137,19 +132,17 @@ def main(_):
   model = Model(sess, state_dim, action_dim, bound=FLAGS.action_bound)
   writer = tf.summary.FileWriter(summary_dir+FLAGS.log_tag, sess.graph)
   model.writer = writer
-  #model=None
   
   def signal_handler(signal, frame):
     print('You pressed Ctrl+C!')
     #save checkpoint?
     print('saving checkpoints')
     model.save(summary_dir+FLAGS.log_tag)
-    #rosinterface.close()
     sess.close()
     print('done.')
     sys.exit(0)
-  print('------------Press Ctrl+C to end the learning')
   signal.signal(signal.SIGINT, signal_handler)
+  print('------------Press Ctrl+C to end the learning') 
   
   def run_episode(data_type):
     '''run over batches
@@ -176,6 +169,8 @@ def main(_):
         depth_b = np.array([_[2] for _ in batch])
         if not FLAGS.auxiliary_depth:
           if data_type=='train':
+            # print(im_b.shape)
+            # import pdb; pdb.set_trace()
             _, losses = model.backward(im_b, trgt_b)
           else:
             _, losses = model.forward(im_b, targets=trgt_b)

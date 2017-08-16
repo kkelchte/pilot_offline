@@ -95,6 +95,7 @@ from __future__ import print_function
 from collections import namedtuple
 
 import tensorflow as tf
+FLAGS = tf.app.flags.FLAGS
 
 slim = tf.contrib.slim
 
@@ -319,17 +320,18 @@ def mobilenet_v1(inputs,
         # output height 55 width 74
         aux_logits=tf.reshape(aux_logits, [-1, 55, 74])
         end_points[end_point] = aux_logits
-
-      with tf.variable_scope('control'): 
-        # 1 x 1 x 1024
-        net = slim.dropout(net, keep_prob=dropout_keep_prob, scope='Dropout_1b')
-        logits = slim.conv2d(net, num_classes, [1, 1], activation_fn=None,
-                             normalizer_fn=None, scope='Conv2d_1c_1x1')
-        if spatial_squeeze:
-          logits = tf.squeeze(logits, [1, 2], name='SpatialSqueeze')
-      end_points['Logits'] = logits
-      if prediction_fn:
-        end_points['Predictions'] = prediction_fn(logits, scope='Predictions')
+      logits = None
+      if not FLAGS.n_fc:
+        with tf.variable_scope('control'): 
+          # 1 x 1 x 1024
+          net = slim.dropout(net, keep_prob=dropout_keep_prob, scope='Dropout_1b')
+          logits = slim.conv2d(net, num_classes, [1, 1], activation_fn=None,
+                               normalizer_fn=None, scope='Conv2d_1c_1x1')
+          if spatial_squeeze:
+            logits = tf.squeeze(logits, [1, 2], name='SpatialSqueeze')
+        end_points['Logits'] = logits
+        if prediction_fn:
+          end_points['Predictions'] = prediction_fn(logits, scope='Predictions')
   return logits, end_points
 
 mobilenet_v1.default_image_size = 224

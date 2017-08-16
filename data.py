@@ -21,7 +21,7 @@ FLAGS = tf.app.flags.FLAGS
 # ===========================
 #   Data Parameters
 # ===========================
-tf.app.flags.DEFINE_string("dataset", "esat","pick the dataset in data_root from which your movies can be found.")
+tf.app.flags.DEFINE_string("dataset", "small","pick the dataset in data_root from which your movies can be found.")
 tf.app.flags.DEFINE_integer("batch_size", 16, "The size of the minibatch used for training.")
 tf.app.flags.DEFINE_string("data_root", "/esat/qayd/kkelchte/docker_home/pilot_data", "Define the root folder of the different datasets.")
 tf.app.flags.DEFINE_integer("num_threads", 4, "The number of threads for loading one minibatch.")
@@ -188,6 +188,7 @@ def generate_batch(data_type):
             def load_rgb_depth_image(run_ind, frame_ind):
               # load image
               img_file = join(data_set[run_ind][0],'RGB', '{0:010d}.jpg'.format(data_set[run_ind][1][frame_ind]))
+              # print('img_file ',img_file)
               img = Image.open(img_file)
               img = sm.imresize(img,im_size,'nearest').astype(float) #.astype(np.float32)
               # center the data around zero with 1standard devation
