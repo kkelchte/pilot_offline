@@ -49,13 +49,20 @@ tf.app.flags.DEFINE_string("device", '/gpu:0', "Choose to run on gpu or cpu: /cp
 # Set the random seed to get similar examples
 tf.app.flags.DEFINE_integer("random_seed", 123, "Set the random seed to get similar examples.")
 # Overwrite existing logfolder
-tf.app.flags.DEFINE_boolean("owr", False, "Overwrite existing logfolder when it is not testing.")
+tf.app.flags.DEFINE_boolean("owr", True, "Overwrite existing logfolder when it is not testing.")
 tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the actions can go. Default: [-1:1].")
-tf.app.flags.DEFINE_string("network", 'mobile', "Define the type of network: inception / depth / mobile.")
-tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether the horizontal line of depth is predicted as auxiliary task in the feature.")
+tf.app.flags.DEFINE_string("network", 'mobile_small', "Define the type of network: inception / depth / mobile.")
+tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether a depth map is predicted.")
+
+tf.app.flags.DEFINE_boolean("auxiliary_odom", False, "Specify whether the odometry or change in x,y,z,Y is predicted.")
 tf.app.flags.DEFINE_boolean("plot_depth", False, "Specify whether the depth predictions is saved as images.")
+tf.app.flags.DEFINE_boolean("lstm", False, "In case of True, cnn-features are fed into LSTM control layers.")
 tf.app.flags.DEFINE_boolean("n_fc", False, "In case of True, prelogit features are concatenated before feeding to the fully connected layers.")
 tf.app.flags.DEFINE_integer("n_frames", 3, "Specify the amount of frames concatenated in case of n_fc.")
+tf.app.flags.DEFINE_integer("num_steps", 8, "Define the number of steps the LSTM layers are unrolled.")
+tf.app.flags.DEFINE_integer("lstm_hiddensize", 100, "Define the number of hidden units in the LSTM control layer.")
+
+tf.app.flags.DEFINE_boolean("rl", False, "In case of rl, use reinforcement learning to weight the gradients with a cost-to-go estimated from current depth.")
 
 # ===========================
 #   Save settings
@@ -64,7 +71,7 @@ def save_config(logfolder, file_name = "configuration"):
   """
   save all the FLAG values in a config file / xml file
   """
-  print("Save configuration in xml.")
+  print("Save configuration to: ", logfolder)
   root = ET.Element("conf")
   flg = ET.SubElement(root, "flags")
   
@@ -91,13 +98,13 @@ def main(_):
   if FLAGS.log_tag == 'testing' or FLAGS.owr:
     if os.path.isdir(summary_dir+FLAGS.log_tag):
       shutil.rmtree(summary_dir+FLAGS.log_tag,ignore_errors=False)
-  try:
-    os.makedirs(summary_dir+FLAGS.log_tag)
-  except OSError:
-    pass
-  else:
-    save_config(summary_dir+FLAGS.log_tag)
-
+  else :
+    if os.path.isdir(summary_dir+FLAGS.log_tag):
+      raise NameError( 'Logfolder already exists, overwriting alert: '+ summary_dir+FLAGS.log_tag ) 
+  os.makedirs(summary_dir+FLAGS.log_tag) 
+  # os.mkdir(summary_dir+FLAGS.log_tag)
+  save_config(summary_dir+FLAGS.log_tag)
+    
   # some startup settings
   np.random.seed(FLAGS.random_seed)
   tf.set_random_seed(FLAGS.random_seed)
@@ -111,6 +118,8 @@ def main(_):
     state_dim = depth_estim.depth_estim_v1.input_size
   elif FLAGS.network =='mobile':
     state_dim = [1, mobile_net.mobilenet_v1.default_image_size, mobile_net.mobilenet_v1.default_image_size, 3]  
+  elif FLAGS.network =='mobile_small':
+    state_dim = [1, mobile_net.mobilenet_v1.default_image_size_small, mobile_net.mobilenet_v1.default_image_size_small, 3]  
   else:
     raise NameError( 'Network is unknown: ', FLAGS.network)
     
@@ -144,7 +153,7 @@ def main(_):
   signal.signal(signal.SIGINT, signal_handler)
   print('------------Press Ctrl+C to end the learning') 
   
-  def run_episode(data_type):
+  def run_episode(data_type, sumvar):
     '''run over batches
     return different losses
     type: 'train', 'val' or 'test'
@@ -159,83 +168,85 @@ def main(_):
     tot_loss=[]
     ctr_loss=[]
     dep_loss=[]
+    odo_loss=[]
     for index, ok, batch in data.generate_batch(data_type):
-      # import pdb; pdb.set_trace()
       data_loading_time+=(time.time()-start_data_time)
       start_calc_time=time.time()
       if ok:
-        im_b = np.array([_[0] for _ in batch])
-        trgt_b = np.array([[_[1]] for _ in batch])
-        depth_b = np.array([_[2] for _ in batch])
-        if not FLAGS.auxiliary_depth:
-          if data_type=='train':
-            # print(im_b.shape)
-            # import pdb; pdb.set_trace()
-            _, losses = model.backward(im_b, trgt_b)
-          else:
-            _, losses = model.forward(im_b, targets=trgt_b)
-          dep_loss.append(0)
-        else:
-          if data_type=='train':
-            _, losses = model.backward(im_b, trgt_b, depth_b)
-          else:
-            _, losses = model.forward(im_b, targets=trgt_b, depth_targets=depth_b)
-          dep_loss.append(losses[2])
-        tot_loss.append(losses[0])
-        if losses[1] != 0: #in case the control loss is zero it means there was no control target.
-          ctr_loss.append(losses[1])
+        inputs = np.array([_['img'] for _ in batch])
+        state = []
+        targets = np.array([[_['ctr']] for _ in batch])
+        target_depth = np.array([_['depth'] for _ in batch]).reshape(-1,55,74) if FLAGS.auxiliary_depth else []
+        target_odom = np.array([_['odom'] for _ in batch]).reshape((-1,4)) if FLAGS.auxiliary_odom else []
+        prev_action = np.array([_['prev_act'] for _ in batch]).reshape((-1,1)) if FLAGS.auxiliary_odom else []
+        if data_type=='train':
+          control, losses = model.backward(inputs, state, targets, depth_targets=target_depth, odom_targets=target_odom, prev_action=prev_action)
+        elif data_type=='val' or data_type=='test':
+          control, state, losses, aux_results = model.forward(inputs, state, auxdepth=False, auxodom=False, prev_action=prev_action, targets=targets, target_depth=target_depth, target_odom=target_odom)
+        tot_loss.append(losses['t'])
+        ctr_loss.append(losses['c'])
+        if FLAGS.auxiliary_depth: dep_loss.append(losses['d'])
+        if FLAGS.auxiliary_odom: odo_loss.append(losses['o'])
         if index == 1 and data_type=='val':
           if FLAGS.plot_activations:
-            activation_images = model.plot_activations(im_b, trgt_b)
+            activation_images = model.plot_activations(inputs, targets)
           if FLAGS.plot_depth:
-            depth_predictions = model.plot_depth(im_b, depth_b)
+            depth_predictions = model.plot_depth(inputs, target_depth)
           if FLAGS.plot_histograms:
             # stime = time.time()
-            endpoint_activations = model.get_endpoint_activations(im_b)
+            endpoint_activations = model.get_endpoint_activations(inputs)
             # print('plot activations: {}'.format((stime-time.time())))
       calculation_time+=(time.time()-start_calc_time)
       start_data_time = time.time()
-    if len(tot_loss)==0:
-      raise IOError('Running episode ',data_type,' failed on all batches of this episode.')  
     print('>>{0} [{1[2]}/{1[1]}_{1[3]:02d}:{1[4]:02d}]: data {2}; calc {3}'.format(data_type.upper(),tuple(time.localtime()[0:5]),
       print_dur(data_loading_time),print_dur(calculation_time)))
-    print('losses: tot {0:.3g}; ctrl {1:.3g}; depth {2:.3g}'.format(np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss)))
+    print('losses: tot {0:.3g}; ctrl {1:.3g}; depth {2:.3g}; odom {2:.3g};'.format(np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss), np.mean(odo_loss)))
     sys.stdout.flush()
-
-    results = [np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss)]
+    sumvar['loss_total_'+data_type]=np.mean(tot_loss)
+    sumvar['loss_control_'+data_type]=np.mean(ctr_loss)
+    if FLAGS.auxiliary_depth: sumvar['loss_depth_'+data_type]=np.mean(dep_loss)
+    if FLAGS.auxiliary_odom: sumvar['loss_odom_'+data_type]=np.mean(odo_loss)
+    
     if len(activation_images) != 0:
-      results.append(activation_images)
+      sumvar['conv_activations']=activation_images
     if len(depth_predictions) != 0:
-      results.append(depth_predictions)
-    if len(endpoint_activations) != 0:
-      results.extend(endpoint_activations)
-    return results
+      sumvar['depth_predictions']=depth_predictions
+    if FLAGS.plot_histograms:
+      for i, ep in enumerate(model.endpoints):
+        sumvar['activations_{}'.format(ep)]=endpoint_activations[i]
+    return sumvar
 
   data.prepare_data((state_dim[1], state_dim[2], state_dim[3]))
-  # import pdb; pdb.set_trace()
   for ep in range(FLAGS.max_episodes):
     print('start episode: {}'.format(ep))
-    sumvar=[]
     # ----------- train episode
-    results = run_episode('train')
-    # results = [0,0,0]
-    sumvar.extend(results)
+    sumvar = run_episode('train', {})
     
     # ----------- validate episode
-    results = run_episode('val')
-    sumvar.extend(results)
-
+    # sumvar = run_episode('val', {})
+    sumvar = run_episode('val', sumvar)
+    # import pdb; pdb.set_trace()
+  
     # ----------- write summary
     try:
       model.summarize(sumvar)
     except Exception as e:
       print('failed to summarize {}'.format(e))
     # write checkpoint every x episodes
-    if (ep%20==0 and ep!=0) or ep==(FLAGS.max_episodes-1):
+    if (ep%20==0 and ep!=0):
       print('saved checkpoint')
       model.save(summary_dir+FLAGS.log_tag)
   # ------------ test
-  results = run_episode('test')  
+  sumvar = run_episode('test', {})  
+  # ----------- write summary
+  try:
+    model.summarize(sumvar)
+  except Exception as e:
+    print('failed to summarize {}'.format(e))
+  # write checkpoint every x episodes
+  if (ep%20==0 and ep!=0) or ep==(FLAGS.max_episodes-1):
+    print('saved checkpoint')
+    model.save(summary_dir+FLAGS.log_tag)
   
     
 if __name__ == '__main__':

@@ -40,6 +40,9 @@ def load_set(data_type):
   and the second the number of images taken in that flight
   """
   set_list = []
+  if not os.path.exists(join(datasetdir, data_type+'_set.txt')):
+    return []
+
   f = open(join(datasetdir, data_type+'_set.txt'), 'r')
   lst_runs = [ l.strip() for l in f.readlines() ]
   for run_dir in lst_runs:
@@ -53,10 +56,17 @@ def load_set(data_type):
     # parse control data  
     control_file = open(join(run_dir,'control_info.txt'),'r')
     control_file_list = control_file.readlines()
+    # cut last lines to avoid emtpy lines
     while len(control_file_list[-1])<=1 : control_file_list=control_file_list[:-1]
-    # print(run_dir)
     control_parsed = [(int(ctr.strip().split(' ')[0]),float(ctr.strip().split(' ')[6])) for ctr in control_file_list]
-    # import pdb; pdb.set_trace()
+    if FLAGS.auxiliary_odom:
+      odom_file = open(join(run_dir,'odom_info.txt'),'r')
+      odom_file_list = odom_file.readlines()
+      while len(odom_file_list[-1])<=1 : odom_file_list=odom_file_list[:-1]
+      odom_parsed = { int(l[:-1].split(' ')[0]): (float(l[10:-1].split(',')[0]), # odom x
+              float(l[10:-1].split(',')[1]), # odom y
+              float(l[10:-1].split(',')[2]), # odom z
+              float(l[10:-1].split(',')[3])) for l in odom_file_list}
     def sync_control():
       control_list = []
       corresponding_imgs = []
@@ -67,14 +77,13 @@ def load_set(data_type):
           try:
             ctr_ind, ctr_val = control_parsed.pop(0)
             # print("ctr_ind: {}".format(ctr_ind))
-          except IndexError:
+          except (IndexError): # In case control has no more lines though RGB has still images, stop anyway:
             # print("return corresponding_imgs: {} \n control_list{}".format(corresponding_imgs, control_list))
             return corresponding_imgs, control_list
         # clip at -1 and 1
         if abs(ctr_val) > 1: ctr_val = np.sign(ctr_val)
         control_list.append(ctr_val)
         corresponding_imgs.append(ni)
-        # print("append img {}: ctr num {}".format(ni, ctr_ind))
       return corresponding_imgs, control_list
     num_imgs, control_list = sync_control()
     assert len(num_imgs) == len(control_list), "Length of number of images {0} is not equal to number of control {1}".format(len(num_imgs),len(control_list))
@@ -94,8 +103,25 @@ def load_set(data_type):
         depth_list.append(smallest_depth)
       num_imgs = num_imgs[:len(depth_list)]
       control_list = control_list[:len(depth_list)]
-      assert len(num_imgs) == len(control_list) == len(depth_list), "Length of input(imags,control,depth) is not equal"
-    set_list.append((run_dir, num_imgs, control_list, depth_list))
+      assert len(num_imgs) == len(depth_list), "Length of input(imags,control,depth) is not equal"
+    
+    # Add odometry values
+    odom_list = []
+    if FLAGS.auxiliary_odom:
+      for ni in num_imgs:
+        # print ni
+        oi = ni
+        odom_val = []
+        while len(odom_val) == 0:
+          try:
+            odom_val = odom_parsed[oi]
+          except KeyError:
+            oi=ni-1 #in case odom index missed one, take the previous sample
+        odom_list.append(odom_val)
+      assert len(num_imgs) == len(odom_list), "Length of number of images {0} is not equal to number of odom {1}".format(len(num_imgs),len(odom_list))
+
+    set_list.append({'name':run_dir, 'num_imgs':num_imgs, 'controls':control_list, 'depths':depth_list, 'odoms':odom_list})
+    # set_list.append((run_dir, num_imgs, control_list, depth_list))
   f.close()
   # random.shuffle(set_list)
   return set_list
@@ -104,6 +130,10 @@ def prepare_data(size, size_depth=(55,74)):
   global im_size, full_set, de_size, esat_depth_file, esat_key, max_key
   '''Load lists of tuples refering to images from which random batches can be drawn'''
   # stime = time.time()
+  # some startup settings
+  np.random.seed(FLAGS.random_seed)
+  tf.set_random_seed(FLAGS.random_seed)
+  
   train_set = load_set('train')
   val_set=load_set('val')
   test_set=load_set('test')
@@ -131,7 +161,7 @@ def generate_batch(data_type):
   - auxb: batch with auxiliary info
   """
   data_set=full_set[data_type]
-  number_of_frames = sum([len(run[1]) for run in data_set])
+  number_of_frames = sum([len(run['num_imgs']) for run in data_set])
   # When there is that much data applied that you can get more than 100 minibatches out
   # stick to 100, otherwise one epoch takes too long and the training is not updated
   # regularly enough.
@@ -168,15 +198,14 @@ def generate_batch(data_type):
       # checklist keeps track for each batch whether all the loaded data was loaded correctly
       checklist = []
       # list of samples to fill batch for threads to know what sample to load
-      # thread_indices = list(range(FLAGS.batch_size))
       stime=time.time()
       for batch_num in range(FLAGS.batch_size):
         # choose random index over all runs:
         run_ind = random.choice(range(len(data_set)))
         # choose random index over image numbers:
-        frame_ind = random.choice(range(len(data_set[run_ind][1])))
+        frame_ind = random.choice(range(len(data_set[run_ind]['num_imgs'])))
         if FLAGS.n_fc:
-          frame_ind = random.choice(range(len(data_set[run_ind][1])-FLAGS.n_frames))
+          frame_ind = random.choice(range(len(data_set[run_ind]['num_imgs'])-FLAGS.n_frames))
         batch_indices.append((batch_num, run_ind, frame_ind))
       # print("picking random indices duration: ",time.time()-stime)
       # import pdb; pdb.set_trace()
@@ -187,7 +216,7 @@ def generate_batch(data_type):
             loc_ind, run_ind, frame_ind = batch_indices.pop()
             def load_rgb_depth_image(run_ind, frame_ind):
               # load image
-              img_file = join(data_set[run_ind][0],'RGB', '{0:010d}.jpg'.format(data_set[run_ind][1][frame_ind]))
+              img_file = join(data_set[run_ind]['name'],'RGB', '{0:010d}.jpg'.format(data_set[run_ind]['num_imgs'][frame_ind]))
               # print('img_file ',img_file)
               img = Image.open(img_file)
               img = sm.imresize(img,im_size,'nearest').astype(float) #.astype(np.float32)
@@ -196,24 +225,30 @@ def generate_batch(data_type):
               img -= FLAGS.mean
               img = img*1/FLAGS.std
               
-              de = None          
+              de = []          
               if FLAGS.auxiliary_depth:
-                depth_file = join(data_set[run_ind][0],'Depth', '{0:010d}.jpg'.format(data_set[run_ind][3][frame_ind]))
+                depth_file = join(data_set[run_ind]['name'],'Depth', '{0:010d}.jpg'.format(data_set[run_ind]['depths'][frame_ind]))
                 de = Image.open(depth_file)
                 de = sm.imresize(de,de_size,'nearest')
                 de = de * 1/255. * 5.
               return img, de
-            
+            odom = []
+            prev_action = []
             if FLAGS.n_fc:
               ims = []
               for frame in range(FLAGS.n_frames):
                 image, de = load_rgb_depth_image(run_ind, frame_ind+frame) # target depth (de) is each time overwritten
                 ims.append(image)
               im = np.concatenate(ims, axis=2)
+              ctr = data_set[run_ind]['controls'][frame_ind+FLAGS.n_frames-1]
+              if FLAGS.auxiliary_odom: 
+                odom = data_set[run_ind]['odoms'][frame_ind+FLAGS.n_frames-1]
+                prev_action = data_set[run_ind]['controls'][frame_ind+FLAGS.n_frames-2]
             else:
               im, de = load_rgb_depth_image(run_ind, frame_ind)
+              ctr = data_set[run_ind]['controls'][frame_ind]
             # append rgb image, control and depth to batch
-            batch.append((im, data_set[run_ind][2][frame_ind], de))
+            batch.append({'img':im, 'ctr':ctr, 'depth':de, 'odom':odom, 'prev_act':prev_action})
             
             checklist.append(True)
           except IndexError as e:
@@ -244,30 +279,41 @@ def print_dur(start_time):
     return "time: %dh:%02dm:%0.5fs" % (h, m, s)
   
 if __name__ == '__main__':
-  FLAGS.auxiliary_depth = False
+  FLAGS.auxiliary_depth = True
+  FLAGS.n_fc = True
+  FLAGS.n_frames = 3
+  FLAGS.auxiliary_odom = True
+  FLAGS.random_seed = 123
   prepare_data((240,320,3))
 
-  # import pdb; pdb.set_trace()
-  print 'run_dir:'
-  full_set['train'][0][0]
-  print 'len images: {}'.format(len(full_set['train'][0][1]))
-  print 'len control: {}'.format(len(full_set['train'][0][2]))
-  print 'len depth: {}'.format(len(full_set['train'][0][3]))
+  print 'run_dir: {}'.format(full_set['train'][0]['name'])
+  print 'len images: {}'.format(len(full_set['train'][0]['num_imgs']))
+  print 'len control: {}'.format(len(full_set['train'][0]['controls']))
+  print 'len depth: {}'.format(len(full_set['train'][0]['depths']))
+  print 'len odoms: {}'.format(len(full_set['train'][0]['odoms']))
   
-  # start_time=time.time()
-  # for index, ok, batch in generate_batch('train'):
-  #   print('b: ',index,' ok ',ok,' ',print_dur(start_time))
-  #   print 'RGB Image:'
-  #   print batch[0][0].shape
-  #   print type(batch[0][0][0,0,0])
-  #   print 'min: ',np.amin(batch[0][0]),' max: ',np.amax(batch[0][0])
-  #   print 'depth Image:'
-  #   print batch[0][2].shape
-  #   print type(batch[0][2][0,0])
-  #   print 'min: ',np.amin(batch[0][2]),' max: ',np.amax(batch[0][2])
-  #   import pdb; pdb.set_trace()
-  #   start_time=time.time()
+  # import pdb; pdb.set_trace()
+  
+  start_time=time.time()
+  for index, ok, batch in generate_batch('train'):
+    pass
+    # print('b: ',index,' ok ',ok,' ',print_dur(start_time))
+    # print 'RGB Image:'
+    # print batch[0]['img'].shape
+    # print type(batch[0]['img'][0,0,0])
+    # print 'min: ',np.amin(batch[0]['img']),' max: ',np.amax(batch[0]['img'])
+    # if len(batch[0]['depth'])!=0:
+      # print 'depth Image:'
+      # print batch[0]['depth'].shape
+      # print type(batch[0]['depth'][0,0])
+      # print 'min: ',np.amin(batch[0]['depth']),' max: ',np.amax(batch[0]['depth'])
+    # if len(batch[0]['odom'])!=0:
+      # print 'odom:'
+      # print type(batch[0]['odom'][0])
+      # print 'min: ',np.amin(batch[0]['odom']),' max: ',np.amax(batch[0]['odom'])
+    # import pdb; pdb.set_trace()
+    # start_time=time.time()
 
-  #   pass
-  # print('loading time one episode: ', print_dur(start_time))
+    pass
+  print('loading time one episode: ', print_dur(start_time))
   
