@@ -120,6 +120,8 @@ def main(_):
     state_dim = [1, mobile_net.mobilenet_v1.default_image_size, mobile_net.mobilenet_v1.default_image_size, 3]  
   elif FLAGS.network =='mobile_small':
     state_dim = [1, mobile_net.mobilenet_v1.default_image_size_small, mobile_net.mobilenet_v1.default_image_size_small, 3]  
+  elif FLAGS.network =='mobile_medium':
+    state_dim = [1, mobile_net.mobilenet_v1.default_image_size_medium, mobile_net.mobilenet_v1.default_image_size_medium, 3]  
   else:
     raise NameError( 'Network is unknown: ', FLAGS.network)
     

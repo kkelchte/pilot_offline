@@ -25,7 +25,7 @@ FLAGS = tf.app.flags.FLAGS
 # Weight decay of inception network
 tf.app.flags.DEFINE_float("weight_decay", 0.00001, "Weight decay of inception network")
 # Std of uniform initialization
-tf.app.flags.DEFINE_float("init_scale", 0.0027, "Std of uniform initialization")
+tf.app.flags.DEFINE_float("init_scale", 0.0005, "Std of uniform initialization")
 # Base learning rate
 tf.app.flags.DEFINE_boolean("random_learning_rate", False, "Use sampled learning rate from UL(10**-4, 1)")
 tf.app.flags.DEFINE_float("learning_rate", 0.1, "Start learning rate.")
@@ -187,8 +187,10 @@ class Model(object):
           self.outputs, self.endpoints = inception.inception_v3(self.inputs, num_classes=self.output_size, is_training=True)   
           self.controls, _ = inception.inception_v3(self.inputs, num_classes=self.output_size, is_training=False)
       
-      elif FLAGS.network=='mobile' or FLAGS.network=='mobile_small':
-        depth_multiplier = 0.25 if FLAGS.network=='mobile_small' else 1
+      elif FLAGS.network=='mobile' or FLAGS.network=='mobile_small' or FLAGS.network=='mobile_medium':
+        if FLAGS.network=='mobile_small': depth_multiplier = 0.25 
+        elif FLAGS.network=='mobile_medium': depth_multiplier = 0.5 
+        else : depth_multiplier = 1 
         with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(weight_decay=FLAGS.weight_decay,
                              stddev=FLAGS.init_scale)):
           if FLAGS.n_fc:
@@ -309,13 +311,14 @@ class Model(object):
       if FLAGS.auxiliary_depth:
         # self.depth_targets = tf.placeholder(tf.float32, [None,1,1,64])
         self.depth_targets = tf.placeholder(tf.float32, [None,55,74])
-        self.weights = FLAGS.depth_weight*tf.cast(tf.greater(self.depth_targets, 0), tf.float32)
-        if FLAGS.depth_loss == 'mean_squared':
-          self.depth_loss = tf.losses.mean_squared_error(self.aux_depth,self.depth_targets,weights=self.weights)
+      if FLAGS.auxiliary_depth:
+        weights = FLAGS.depth_weight*tf.cast(tf.greater(self.depth_targets, 0), tf.float32) # put loss weight on zero where depth is negative.        
+	if FLAGS.depth_loss == 'mean_squared':
+          self.depth_loss = tf.losses.mean_squared_error(self.aux_depth,self.depth_targets,weights=weights)
         elif FLAGS.depth_loss == 'absolute_difference':
-          self.depth_loss = tf.losses.absolute_difference(self.aux_depth,self.depth_targets,weights=self.weights)
+          self.depth_loss = tf.losses.absolute_difference(self.aux_depth,self.depth_targets,weights=weights)
         elif FLAGS.depth_loss == 'huber':
-          self.depth_loss = tf.losses.huber_loss(self.aux_depth,self.depth_targets,weights=self.weights)
+          self.depth_loss = tf.losses.huber_loss(self.aux_depth,self.depth_targets,weights=weights)
         else :
           raise 'Depth loss is unknown: {}'.format(FLAGS.depth_loss)
       if FLAGS.auxiliary_odom:
