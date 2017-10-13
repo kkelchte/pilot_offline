@@ -1,5 +1,5 @@
 # pilot_offline
-Tensorflow 1.1 code for training DNN policy from an offline dataset.
+Tensorflow 1.1 code for training DNN policy from an offline dataset. It is used in the [DoShiCo challenge](https://kkelchte.github.io/doshico).
 
 ## Dependencies
 * [Tensorflow (>1.1)](https://www.tensorflow.org/install/) or [docker image](https://hub.docker.com/r/kkelchte/ros_gazebo_tensorflow/) up and running.
