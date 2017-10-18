@@ -22,7 +22,7 @@ FLAGS = tf.app.flags.FLAGS
 #   Data Parameters
 # ===========================
 tf.app.flags.DEFINE_string("dataset", "small","pick the dataset in data_root from which your movies can be found.")
-tf.app.flags.DEFINE_integer("batch_size", 16, "The size of the minibatch used for training.")
+tf.app.flags.DEFINE_integer("batch_size", 32, "The size of the minibatch used for training.")
 tf.app.flags.DEFINE_string("data_root", "/esat/qayd/kkelchte/docker_home/pilot_data", "Define the root folder of the different datasets.")
 tf.app.flags.DEFINE_integer("num_threads", 4, "The number of threads for loading one minibatch.")
 tf.app.flags.DEFINE_float("mean", 0, "Define the mean of the input data for centering around zero. Esat data:0.2623")
@@ -66,7 +66,9 @@ def load_set(data_type):
       odom_parsed = { int(l[:-1].split(' ')[0]): (float(l[10:-1].split(',')[0]), # odom x
               float(l[10:-1].split(',')[1]), # odom y
               float(l[10:-1].split(',')[2]), # odom z
-              float(l[10:-1].split(',')[3])) for l in odom_file_list}
+              float(l[10:-1].split(',')[3]), # roll
+              float(l[10:-1].split(',')[4]), # pitch
+              float(l[10:-1].split(',')[5])) for l in odom_file_list} # yaw
     def sync_control():
       control_list = []
       corresponding_imgs = []
@@ -90,7 +92,7 @@ def load_set(data_type):
     
     # Add depth links
     depth_list = [] 
-    if FLAGS.auxiliary_depth:
+    if FLAGS.auxiliary_depth or FLAGS.rl:
       depths_jpg=listdir(join(run_dir,'Depth'))
       num_depths=sorted([int(de[0:-4]) for de in depths_jpg])
       smallest_depth = num_depths.pop(0)
@@ -133,7 +135,7 @@ def prepare_data(size, size_depth=(55,74)):
   # some startup settings
   np.random.seed(FLAGS.random_seed)
   tf.set_random_seed(FLAGS.random_seed)
-  
+  random.seed(FLAGS.random_seed)
   train_set = load_set('train')
   val_set=load_set('val')
   test_set=load_set('test')
@@ -207,6 +209,7 @@ def generate_batch(data_type):
         if FLAGS.n_fc:
           frame_ind = random.choice(range(len(data_set[run_ind]['num_imgs'])-FLAGS.n_frames))
         batch_indices.append((batch_num, run_ind, frame_ind))
+      # print batch_indices
       # print("picking random indices duration: ",time.time()-stime)
       # import pdb; pdb.set_trace()
       def load_image_and_target(coord, batch_indices, batch, checklist):
@@ -225,21 +228,25 @@ def generate_batch(data_type):
               img -= FLAGS.mean
               img = img*1/FLAGS.std
               
-              de = []          
-              if FLAGS.auxiliary_depth:
+              de = []
+              if FLAGS.auxiliary_depth or FLAGS.rl :
                 depth_file = join(data_set[run_ind]['name'],'Depth', '{0:010d}.jpg'.format(data_set[run_ind]['depths'][frame_ind]))
                 de = Image.open(depth_file)
                 de = sm.imresize(de,de_size,'nearest')
                 de = de * 1/255. * 5.
+
               return img, de
             odom = []
             prev_action = []
             if FLAGS.n_fc:
               ims = []
+              # des = []
               for frame in range(FLAGS.n_frames):
                 image, de = load_rgb_depth_image(run_ind, frame_ind+frame) # target depth (de) is each time overwritten
                 ims.append(image)
+                # des.append(de)
               im = np.concatenate(ims, axis=2)
+              # de = np.stack(des, axis=2)
               ctr = data_set[run_ind]['controls'][frame_ind+FLAGS.n_frames-1]
               if FLAGS.auxiliary_odom: 
                 odom = data_set[run_ind]['odoms'][frame_ind+FLAGS.n_frames-1]
@@ -252,6 +259,7 @@ def generate_batch(data_type):
             
             checklist.append(True)
           except IndexError as e:
+            # print(e)
             #print('batch_loaded, wait to stop', e)
             coord.request_stop()
           except Exception as e:
@@ -296,7 +304,10 @@ if __name__ == '__main__':
   
   start_time=time.time()
   for index, ok, batch in generate_batch('train'):
-    pass
+    import pdb; pdb.set_trace()
+    print batch[0]['img'][0:10,0,0]
+    break
+
     # print('b: ',index,' ok ',ok,' ',print_dur(start_time))
     # print 'RGB Image:'
     # print batch[0]['img'].shape
@@ -314,6 +325,6 @@ if __name__ == '__main__':
     # import pdb; pdb.set_trace()
     # start_time=time.time()
 
-    pass
+    # pass
   print('loading time one episode: ', print_dur(start_time))
   

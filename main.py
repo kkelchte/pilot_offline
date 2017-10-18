@@ -32,7 +32,7 @@ FLAGS = tf.app.flags.FLAGS
 # ==========================
 #   Training Parameters
 # ==========================
-tf.app.flags.DEFINE_integer("max_episodes", 100, "The maximum number of episodes (~runs through all the training data.)")
+tf.app.flags.DEFINE_integer("max_episodes", 80, "The maximum number of episodes (~runs through all the training data.)")
 
 # ===========================
 #   Utility Parameters
@@ -52,12 +52,16 @@ tf.app.flags.DEFINE_integer("random_seed", 123, "Set the random seed to get simi
 tf.app.flags.DEFINE_boolean("owr", True, "Overwrite existing logfolder when it is not testing.")
 tf.app.flags.DEFINE_float("action_bound", 1.0, "Define between what bounds the actions can go. Default: [-1:1].")
 tf.app.flags.DEFINE_string("network", 'mobile_small', "Define the type of network: inception / depth / mobile.")
-tf.app.flags.DEFINE_boolean("auxiliary_depth", False, "Specify whether a depth map is predicted.")
+tf.app.flags.DEFINE_boolean("auxiliary_depth", True, "Specify whether a depth map is predicted.")
+tf.app.flags.DEFINE_boolean("auxiliary_ctr", False, "Specify whether control should be predicted besides RL.")
+tf.app.flags.DEFINE_boolean("auxiliary_odom", True, "Specify whether the odometry or change in x,y,z,Y is predicted.")
 
-tf.app.flags.DEFINE_boolean("auxiliary_odom", False, "Specify whether the odometry or change in x,y,z,Y is predicted.")
+tf.app.flags.DEFINE_boolean("random_learning_rate", False, "Use sampled learning rate from UL(10**-2, 1)")
+tf.app.flags.DEFINE_float("learning_rate", 0.5, "Start learning rate.")
+
 tf.app.flags.DEFINE_boolean("plot_depth", False, "Specify whether the depth predictions is saved as images.")
 tf.app.flags.DEFINE_boolean("lstm", False, "In case of True, cnn-features are fed into LSTM control layers.")
-tf.app.flags.DEFINE_boolean("n_fc", False, "In case of True, prelogit features are concatenated before feeding to the fully connected layers.")
+tf.app.flags.DEFINE_boolean("n_fc", True, "In case of True, prelogit features are concatenated before feeding to the fully connected layers.")
 tf.app.flags.DEFINE_integer("n_frames", 3, "Specify the amount of frames concatenated in case of n_fc.")
 tf.app.flags.DEFINE_integer("num_steps", 8, "Define the number of steps the LSTM layers are unrolled.")
 tf.app.flags.DEFINE_integer("lstm_hiddensize", 100, "Define the number of hidden units in the LSTM control layer.")
@@ -90,6 +94,14 @@ def print_dur(duration_time):
 
 # Use the main method for starting the training procedure and closing it in the end.
 def main(_):
+  # some startup settings
+  np.random.seed(FLAGS.random_seed)
+  tf.set_random_seed(FLAGS.random_seed)
+  
+  if FLAGS.random_learning_rate:
+    FLAGS.learning_rate = 10**np.random.uniform(-2,0)
+  
+
   #Check log folders and if necessary remove:
   summary_dir = os.path.join(os.getenv('HOME'),FLAGS.summary_dir)
   # summary_dir = FLAGS.summary_dir
@@ -105,9 +117,6 @@ def main(_):
   # os.mkdir(summary_dir+FLAGS.log_tag)
   save_config(summary_dir+FLAGS.log_tag)
     
-  # some startup settings
-  np.random.seed(FLAGS.random_seed)
-  tf.set_random_seed(FLAGS.random_seed)
     
   #define the size of the network input
   if FLAGS.network == 'inception':
@@ -136,9 +145,11 @@ def main(_):
   # targets=random_ops.random_uniform((1,action_dim))
   # depth_targets=random_ops.random_uniform((1,1,1,64))
   
-  gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
-  config=tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
-  config.gpu_options.allow_growth = True
+  config=tf.ConfigProto(allow_soft_placement=True)
+  config.gpu_options.allow_growth = False
+  # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
+  # config=tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
+  # config.gpu_options.allow_growth = True
   sess = tf.Session(config=config)
   model = Model(sess, state_dim, action_dim, bound=FLAGS.action_bound)
   writer = tf.summary.FileWriter(summary_dir+FLAGS.log_tag, sess.graph)
@@ -171,6 +182,7 @@ def main(_):
     ctr_loss=[]
     dep_loss=[]
     odo_loss=[]
+    q_loss=[]
     for index, ok, batch in data.generate_batch(data_type):
       data_loading_time+=(time.time()-start_data_time)
       start_calc_time=time.time()
@@ -178,17 +190,21 @@ def main(_):
         inputs = np.array([_['img'] for _ in batch])
         state = []
         targets = np.array([[_['ctr']] for _ in batch])
-        target_depth = np.array([_['depth'] for _ in batch]).reshape(-1,55,74) if FLAGS.auxiliary_depth else []
-        target_odom = np.array([_['odom'] for _ in batch]).reshape((-1,4)) if FLAGS.auxiliary_odom else []
+        # target_depth = np.array([_['depth'] for _ in batch]).reshape((-1,55,74,FLAGS.n_frames if FLAGS.n_fc else 1)) if FLAGS.auxiliary_depth or FLAGS.rl else []
+        target_depth = np.array([_['depth'] for _ in batch]).reshape((-1,55,74)) if FLAGS.auxiliary_depth or FLAGS.rl else []
+        target_odom = np.array([_['odom'] for _ in batch]).reshape((-1,6)) if FLAGS.auxiliary_odom else []
+        # target_odom = np.array([_['odom'] for _ in batch]).reshape((-1,4)) if FLAGS.auxiliary_odom else []
         prev_action = np.array([_['prev_act'] for _ in batch]).reshape((-1,1)) if FLAGS.auxiliary_odom else []
         if data_type=='train':
-          control, losses = model.backward(inputs, state, targets, depth_targets=target_depth, odom_targets=target_odom, prev_action=prev_action)
+          losses = model.backward(inputs, state, targets, depth_targets=target_depth, odom_targets=target_odom, prev_action=prev_action)
         elif data_type=='val' or data_type=='test':
-          control, state, losses, aux_results = model.forward(inputs, state, auxdepth=False, auxodom=False, prev_action=prev_action, targets=targets, target_depth=target_depth, target_odom=target_odom)
+          state, losses, aux_results = model.forward(inputs, state, auxdepth=False, auxodom=False, prev_action=prev_action, targets=targets, target_depth=target_depth, target_odom=target_odom)
         tot_loss.append(losses['t'])
-        ctr_loss.append(losses['c'])
+        if not FLAGS.no_control and (not FLAGS.rl or FLAGS.auxiliary_ctr): ctr_loss.append(losses['c'])
         if FLAGS.auxiliary_depth: dep_loss.append(losses['d'])
         if FLAGS.auxiliary_odom: odo_loss.append(losses['o'])
+        if FLAGS.rl: q_loss.append(losses['q'])
+        
         if index == 1 and data_type=='val':
           if FLAGS.plot_activations:
             activation_images = model.plot_activations(inputs, targets)
@@ -200,15 +216,11 @@ def main(_):
             # print('plot activations: {}'.format((stime-time.time())))
       calculation_time+=(time.time()-start_calc_time)
       start_data_time = time.time()
-    print('>>{0} [{1[2]}/{1[1]}_{1[3]:02d}:{1[4]:02d}]: data {2}; calc {3}'.format(data_type.upper(),tuple(time.localtime()[0:5]),
-      print_dur(data_loading_time),print_dur(calculation_time)))
-    print('losses: tot {0:.3g}; ctrl {1:.3g}; depth {2:.3g}; odom {2:.3g};'.format(np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss), np.mean(odo_loss)))
-    sys.stdout.flush()
-    sumvar['loss_total_'+data_type]=np.mean(tot_loss)
-    sumvar['loss_control_'+data_type]=np.mean(ctr_loss)
-    if FLAGS.auxiliary_depth: sumvar['loss_depth_'+data_type]=np.mean(dep_loss)
-    if FLAGS.auxiliary_odom: sumvar['loss_odom_'+data_type]=np.mean(odo_loss)
-    
+    sumvar['loss_'+data_type+'_total']=np.mean(tot_loss)
+    if not FLAGS.no_control and (not FLAGS.rl or FLAGS.auxiliary_ctr): sumvar['loss_'+data_type+'_control']=np.mean(ctr_loss)
+    if FLAGS.auxiliary_depth: sumvar['loss_'+data_type+'_depth']=np.mean(dep_loss)
+    if FLAGS.auxiliary_odom: sumvar['loss_'+data_type+'_odom']=np.mean(odo_loss)
+    if FLAGS.rl: sumvar['loss_'+data_type+'_q']=np.mean(q_loss)
     if len(activation_images) != 0:
       sumvar['conv_activations']=activation_images
     if len(depth_predictions) != 0:
@@ -216,6 +228,12 @@ def main(_):
     if FLAGS.plot_histograms:
       for i, ep in enumerate(model.endpoints):
         sumvar['activations_{}'.format(ep)]=endpoint_activations[i]
+    print('>>{0} [{1[2]}/{1[1]}_{1[3]:02d}:{1[4]:02d}]: data {2}; calc {3}'.format(data_type.upper(),tuple(time.localtime()[0:5]),
+      print_dur(data_loading_time),print_dur(calculation_time)))
+    # print('losses: tot {0:.3g}; ctrl {1:.3g}; depth {2:.3g}; odom {2:.3g}; q {3:.3g}'.format(np.mean(tot_loss), np.mean(ctr_loss), np.mean(dep_loss), np.mean(odo_loss), np.mean(q_loss)))
+    if data_type == 'val' or data_type == 'test':
+      print('{}'.format(str(sumvar)))
+    sys.stdout.flush()
     return sumvar
 
   data.prepare_data((state_dim[1], state_dim[2], state_dim[3]))

@@ -23,35 +23,37 @@ import math
 FLAGS = tf.app.flags.FLAGS
 
 # Weight decay of inception network
-tf.app.flags.DEFINE_float("weight_decay", 0.00001, "Weight decay of inception network")
+tf.app.flags.DEFINE_float("weight_decay", 0.00004, "Weight decay of inception network")
 # Std of uniform initialization
 tf.app.flags.DEFINE_float("init_scale", 0.0005, "Std of uniform initialization")
 # Base learning rate
-tf.app.flags.DEFINE_boolean("random_learning_rate", False, "Use sampled learning rate from UL(10**-4, 1)")
-tf.app.flags.DEFINE_float("learning_rate", 0.1, "Start learning rate.")
-tf.app.flags.DEFINE_float("depth_weight", 0.01, "Define the weight applied to the depth values in the loss relative to the control loss.")
-tf.app.flags.DEFINE_float("odom_weight", 0.01, "Define the weight applied to the odometry values in the loss relative to the control loss.")
+tf.app.flags.DEFINE_float("depth_weight", 1, "Define the weight applied to the depth values in the loss relative to the control loss.")
+tf.app.flags.DEFINE_float("control_weight", 1, "Define the weight applied to the control loss.")
+tf.app.flags.DEFINE_float("odom_weight", 1, "Define the weight applied to the odometry values in the loss relative to the control loss.")
+tf.app.flags.DEFINE_boolean("no_control", False, "In case of true, the control loss is not part of the total loss and in this way not learned.")
 # Specify where the Model, trained on ImageNet, was saved.
 tf.app.flags.DEFINE_string("model_path", 'mobilenet_small', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # tf.app.flags.DEFINE_string("model_path", '/users/visics/kkelchte/tensorflow/models', "Specify where the Model, trained on ImageNet, was saved: PATH/TO/vgg_16.ckpt, inception_v3.ckpt or ")
 # Define the initializer
-#tf.app.flags.DEFINE_string("initializer", 'xavier', "Define the initializer: xavier or uniform [-0.03, 0.03]")
 tf.app.flags.DEFINE_string("checkpoint_path", 'mobilenet_small', "Specify the directory of the checkpoint of the earlier trained model.")
 tf.app.flags.DEFINE_boolean("continue_training", False, "Specify whether the training continues from a checkpoint or from a imagenet-pretrained model.")
-tf.app.flags.DEFINE_boolean("grad_mul", False, "Specify whether the weights of the final tanh activation should be learned faster.")
+tf.app.flags.DEFINE_boolean("grad_mul", True, "Specify whether the weights of the final tanh activation should be learned faster.")
+tf.app.flags.DEFINE_float("grad_mul_weight", 0.001, "Specify the amount the gradients of the cnn should be less applied.")
 tf.app.flags.DEFINE_boolean("freeze", False, "Specify whether feature extracting network should be frozen and only the logit scope should be trained.")
 tf.app.flags.DEFINE_integer("exclude_from_layer", 8, "In case of training from model (not continue_training), specify up untill which layer the weights are loaded: 5-6-7-8. Default 8: only leave out the logits and auxlogits.")
 tf.app.flags.DEFINE_boolean("plot_activations", False, "Specify whether the activations are weighted.")
-tf.app.flags.DEFINE_float("dropout_keep_prob", 0.9, "Specify the probability of dropout to keep the activation.")
+tf.app.flags.DEFINE_float("dropout_keep_prob", 0.5, "Specify the probability of dropout to keep the activation.")
 tf.app.flags.DEFINE_integer("clip_grad", 0, "Specify the max gradient norm: default 0, recommended 4.")
-tf.app.flags.DEFINE_string("optimizer", 'adadelta', "Specify optimizer, options: adam, adadelta")
+tf.app.flags.DEFINE_string("optimizer", 'adadelta', "Specify optimizer, options: adam, adadelta, gradientdescent, rmsprop")
 tf.app.flags.DEFINE_boolean("plot_histograms", False, "Specify whether to plot histograms of the weights.")
-tf.app.flags.DEFINE_boolean("feed_previous_action", True, "Feed previous action as concatenated feature for odom prediction layers.")
+tf.app.flags.DEFINE_boolean("feed_previous_action", False, "Feed previous action as concatenated feature for odom prediction layers.")
 tf.app.flags.DEFINE_boolean("concatenate_depth", False, "Add depth prediction of 2 last frames for odometry prediction.")
 tf.app.flags.DEFINE_boolean("concatenate_odom", False, "Add odom prediction of 2 last frames for control prediction.")
 tf.app.flags.DEFINE_integer("odom_hidden_units", 50, "Define the number of hidden units in the odometry decision layer.")
 tf.app.flags.DEFINE_string("odom_loss", 'mean_squared', "absolute_difference or mean_squared or huber")
-tf.app.flags.DEFINE_string("depth_loss", 'mean_squared', "absolute_difference or mean_squared or huber")
+tf.app.flags.DEFINE_string("depth_loss", 'huber', "absolute_difference or mean_squared or huber")
+tf.app.flags.DEFINE_string("no_batchnorm_learning", True, "In case of no batchnorm learning, are the batch normalization params (alphas and betas) not learned")
+tf.app.flags.DEFINE_boolean("extra_control_layer", True, "Add an extra hidden control layer with 50 units in case of n_fc.")
 
 """
 Build basic NN model
@@ -69,14 +71,9 @@ class Model(object):
     self.prefix = prefix
     self.device = device
 
+    self.lr = FLAGS.learning_rate
     np.random.seed(FLAGS.random_seed)
     tf.set_random_seed(FLAGS.random_seed)
-    if FLAGS.random_learning_rate:
-      # self.lr = 10**np.random.uniform(-4,0)
-      self.lr = 10**np.random.uniform(-3,0)
-    else:
-      self.lr = FLAGS.learning_rate 
-    print 'learning rate: ', self.lr    
     self.global_step = tf.Variable(0, name='global_step', trainable=False)
     self.define_network()
     
@@ -191,95 +188,114 @@ class Model(object):
         if FLAGS.network=='mobile_small': depth_multiplier = 0.25 
         elif FLAGS.network=='mobile_medium': depth_multiplier = 0.5 
         else : depth_multiplier = 1 
-        with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(weight_decay=FLAGS.weight_decay,
-                             stddev=FLAGS.init_scale)):
-          if FLAGS.n_fc:
-            self.inputs = tf.placeholder(tf.float32, shape = (self.input_size[0],self.input_size[1],self.input_size[2],FLAGS.n_frames*self.input_size[3]))
-            self.prev_action=tf.placeholder(tf.float32, shape=(None, 1))
-            def feature_extract(is_training=True):
-              features = []
-              for i in range(FLAGS.n_frames):
-                _, endpoints = mobile_net.mobilenet_v1(self.inputs[:,:,:,i*3:(i+1)*3], num_classes=self.output_size, 
-                  is_training=is_training, reuse= (i!=0 and is_training) or not is_training, depth_multiplier=depth_multiplier)
-                features.append(tf.squeeze(endpoints['AvgPool_1a'],[1,2]))
-                if FLAGS.concatenate_depth:
-                  features.append(endpoints['aux_depth_enc'])
-                  # features.append(endpoints['aux_depth_fc_1'])
-              with tf.variable_scope('concatenated_feature', reuse=not is_training): 
-                features=tf.concat(features, axis=1)
-                # features = tf.squeeze(features,[1,2])
-                # print 'features ',features
-                if is_training:
-                  features = slim.dropout(features, keep_prob=FLAGS.dropout_keep_prob, scope='Dropout_1b')  
-              with tf.variable_scope('aux_odom', reuse=not is_training):
-                aux_odom_input = tf.concat([features,self.prev_action], axis=1) if FLAGS.feed_previous_action else features
-                aux_odom_logits = slim.fully_connected(aux_odom_input, FLAGS.odom_hidden_units, tf.nn.relu, normalizer_fn=None, scope='Fc_aux_odom')
-                aux_odom = slim.fully_connected(aux_odom_logits, 4, None, normalizer_fn=None, scope='Fc_aux_odom_1')
-              with tf.variable_scope('control', reuse=not is_training):  
-                control_input = features if not FLAGS.concatenate_odom else tf.concat([features,aux_odom_logits],axis=1)
-                outputs = slim.fully_connected(control_input, 1, None, normalizer_fn=None, scope='Fc_control')
-              aux_depth = endpoints['aux_depth_reshaped']
-              return outputs, aux_depth, aux_odom, endpoints
+        if FLAGS.n_fc:
+          self.inputs = tf.placeholder(tf.float32, shape = (self.input_size[0],self.input_size[1],self.input_size[2],FLAGS.n_frames*self.input_size[3]))
+          self.prev_action=tf.placeholder(tf.float32, shape=(None, 1))
+          def feature_extract(is_training=True):
+            features = []
+            # aux_depth_frames = []
+            for i in range(FLAGS.n_frames):
+              _, endpoints = mobile_net.mobilenet_v1(self.inputs[:,:,:,i*3:(i+1)*3], num_classes=self.output_size, 
+                is_training=is_training, reuse=(i!=0 and is_training) or not is_training, depth_multiplier=depth_multiplier)
+              features.append(tf.squeeze(endpoints['AvgPool_1a'],[1,2]))
+              if FLAGS.concatenate_depth:
+                features.append(endpoints['aux_depth_enc'])
+              # aux_depth_frames.append(endpoints['aux_depth_reshaped'])
+              # features.append(endpoints['aux_depth_fc_1'])
+            
+            # aux_depths = tf.stack(aux_depth_frames,axis=3)
+            # print 'shape aux depth: ',aux_depths
+            with tf.variable_scope('concatenated_feature', reuse=not is_training): 
+              features=tf.concat(features, axis=1)
+              # features = tf.squeeze(features,[1,2])
+              # print 'features ',features
+              if is_training:
+                features = slim.dropout(features, keep_prob=FLAGS.dropout_keep_prob, scope='Dropout_1b')  
+            with tf.variable_scope('aux_odom', reuse=not is_training):
+              aux_odom_input = tf.concat([features,self.prev_action], axis=1) if FLAGS.feed_previous_action else features
+              aux_odom_logits = slim.fully_connected(aux_odom_input, FLAGS.odom_hidden_units, tf.nn.relu, normalizer_fn=None, scope='Fc_aux_odom')
+              aux_odom = slim.fully_connected(aux_odom_logits, 6, None, normalizer_fn=None, scope='Fc_aux_odom_1')
+              # aux_odom = slim.fully_connected(aux_odom_logits, 4, None, normalizer_fn=None, scope='Fc_aux_odom_1')
+            with tf.variable_scope('control', reuse=not is_training):  
+              control_input = features if not FLAGS.concatenate_odom else tf.concat([features,aux_odom_logits],axis=1)
+              if FLAGS.extra_control_layer:
+                control_input = slim.fully_connected(control_input, 50, tf.nn.relu, normalizer_fn=None, scope='H_fc_control')
+              outputs = slim.fully_connected(control_input, 1, None, normalizer_fn=None, scope='Fc_control')
+            aux_depth = endpoints['aux_depth_reshaped']
+            return outputs, aux_depth, aux_odom, endpoints
+          with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(is_training= True, weight_decay=FLAGS.weight_decay,
+                               stddev=FLAGS.init_scale)):
             self.outputs, self.aux_depth, self.aux_odom, self.endpoints = feature_extract(True)
+          with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(is_training= False, weight_decay=FLAGS.weight_decay,
+                               stddev=FLAGS.init_scale)):
             self.controls, self.pred_depth, self.pred_odom, _ = feature_extract(False)
-          elif FLAGS.lstm:
-            def define_lstm(is_training=True, inputs_ph=[]):
-              # define and CNN+LSTM with mobilenet
-              # returns the lstm cell, a batch of outputs, a list of batches of depth predictions for all timesteps
-              # self.inputs = tf.placeholder(tf.float32, shape = (self.input_size[0],None,self.input_size[1],self.input_size[2],self.input_size[3]))
-              with tf.variable_scope("lstm_control", reuse=not is_training):
-                def lstm():
-                  # lstm_cell = tf.contrib.rnn.LSTMCell(FLAGS.lstm_hiddensize, forget_bias=0)
-                  lstm_cell = tf.nn.rnn_cell.LSTMCell(FLAGS.lstm_hiddensize, forget_bias=0)
-                  # lstm_cell = tf.contrib.rnn.DropoutWrapper(lstm_cell, output_keep_prob=FLAGS.dropout_keep_prob if is_training else 1)
-                  lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=FLAGS.dropout_keep_prob if is_training else 1)
-                  return lstm_cell
-                # cell = tf.contrib.rnn.MultiRNNCell([lstm(), lstm()])
-                cell = tf.nn.rnn_cell.MultiRNNCell([lstm(), lstm()])
-                initial_state = cell.zero_state(FLAGS.batch_size if is_training else 1, tf.float32)
-                # state = self.init_state = tf.placeholder(tf.float32, shape = (FLAGS.batch_size if is_training else 1, 2*2*FLAGS.lstm_hiddensize))
-                state = initial_state
-                outputs = []
-                # states = []
-                aux_depths = []
-                for time_step in range(FLAGS.num_steps if is_training else 1):
-                  if time_step > 0: tf.get_variable_scope().reuse_variables()
-                  _, endpoints = mobile_net.mobilenet_v1(inputs_ph[:,time_step,:,:], num_classes=self.output_size, 
-                    is_training=is_training, reuse=(time_step!=0 and is_training) or not is_training,
-                    dropout_keep_prob=FLAGS.dropout_keep_prob, depth_multiplier=depth_multiplier)
-                  aux_depths.append(endpoints['aux_depth_reshaped'])
-                  (output, state) = cell(tf.reshape(endpoints['AvgPool_1a'], (FLAGS.batch_size if is_training else 1, -1)), state)
-                  outputs.append(output)
-                  # states.append(state)
-              final_state = state
-              with tf.variable_scope("lstm_output", reuse=not is_training):
-                # concatenate in 0 direction: axis 0: [batch_at_time1, batch_at_time2, batch_at_time3, ...], axis 1: outputs
-                outputs = tf.reshape(tf.concat(outputs, axis=0),(-1, FLAGS.lstm_hiddensize))
-                aux_depths = tf.reshape(tf.concat(aux_depths,axis=0),(-1,55,74))
-                weights = tf.get_variable("weights",[FLAGS.lstm_hiddensize, self.output_size])        
-                biases = tf.get_variable('biases', [self.output_size])
-                # [?, ouput_size]=[?, hidden_size]*[hidden_size, output_size]
-                # with ? = num_steps * batch_size (b0t0, b0t1, ..., b1t0, b1t1, ...)
-                outputs = tf.matmul(outputs, weights) + biases
-              return cell, outputs, final_state, initial_state, aux_depths
-              # return cell, outputs, final_state, initial_state, aux_depths
+          
+        elif FLAGS.lstm:
+          def define_lstm(is_training=True, inputs_ph=[]):
+            # define and CNN+LSTM with mobilenet
+            # returns the lstm cell, a batch of outputs, a list of batches of depth predictions for all timesteps
+            # self.inputs = tf.placeholder(tf.float32, shape = (self.input_size[0],None,self.input_size[1],self.input_size[2],self.input_size[3]))
+            with tf.variable_scope("lstm_control", reuse=not is_training):
+              def lstm():
+                # lstm_cell = tf.contrib.rnn.LSTMCell(FLAGS.lstm_hiddensize, forget_bias=0)
+                lstm_cell = tf.nn.rnn_cell.LSTMCell(FLAGS.lstm_hiddensize, forget_bias=0)
+                # lstm_cell = tf.contrib.rnn.DropoutWrapper(lstm_cell, output_keep_prob=FLAGS.dropout_keep_prob if is_training else 1)
+                lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=FLAGS.dropout_keep_prob if is_training else 1)
+                return lstm_cell
+              # cell = tf.contrib.rnn.MultiRNNCell([lstm(), lstm()])
+              cell = tf.nn.rnn_cell.MultiRNNCell([lstm(), lstm()])
+              initial_state = cell.zero_state(FLAGS.batch_size if is_training else 1, tf.float32)
+              # state = self.init_state = tf.placeholder(tf.float32, shape = (FLAGS.batch_size if is_training else 1, 2*2*FLAGS.lstm_hiddensize))
+              state = initial_state
+              outputs = []
+              # states = []
+              aux_depths = []
+              for time_step in range(FLAGS.num_steps if is_training else 1):
+                if time_step > 0: tf.get_variable_scope().reuse_variables()
+                _, endpoints = mobile_net.mobilenet_v1(inputs_ph[:,time_step,:,:], num_classes=self.output_size, 
+                  is_training=is_training, reuse=(time_step!=0 and is_training) or not is_training,
+                  dropout_keep_prob=FLAGS.dropout_keep_prob, depth_multiplier=depth_multiplier)
+                aux_depths.append(endpoints['aux_depth_reshaped'])
+                (output, state) = cell(tf.reshape(endpoints['AvgPool_1a'], (FLAGS.batch_size if is_training else 1, -1)), state)
+                outputs.append(output)
+                # states.append(state)
+            final_state = state
+            with tf.variable_scope("lstm_output", reuse=not is_training):
+              # concatenate in 0 direction: axis 0: [batch_at_time1, batch_at_time2, batch_at_time3, ...], axis 1: outputs
+              outputs = tf.reshape(tf.concat(outputs, axis=0),(-1, FLAGS.lstm_hiddensize))
+              aux_depths = tf.reshape(tf.concat(aux_depths,axis=0),(-1,55,74))
+              weights = tf.get_variable("weights",[FLAGS.lstm_hiddensize, self.output_size])        
+              biases = tf.get_variable('biases', [self.output_size])
+              # [?, ouput_size]=[?, hidden_size]*[hidden_size, output_size]
+              # with ? = num_steps * batch_size (b0t0, b0t1, ..., b1t0, b1t1, ...)
+              outputs = tf.matmul(outputs, weights) + biases
+            return cell, outputs, final_state, initial_state, aux_depths
+            # return cell, outputs, final_state, initial_state, aux_depths
+          with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(is_training=True, weight_decay=FLAGS.weight_decay,
+                               stddev=FLAGS.init_scale)):
             self.inputs = tf.placeholder(tf.float32, shape = (FLAGS.batch_size,FLAGS.num_steps,self.input_size[1],self.input_size[2],self.input_size[3]))
             self.lstm, self.outputs, _, self.initial_state, self.aux_depth = define_lstm(True, self.inputs)
-            
+          with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(is_training=False, weight_decay=FLAGS.weight_decay,
+                               stddev=FLAGS.init_scale)):
             self.inputs_eva = tf.placeholder(tf.float32, shape=(1,1,self.input_size[1],self.input_size[2],self.input_size[3]))
             self.lstm_eva, self.controls, self.state, self.initial_state_eva, self.pred_depth = define_lstm(False, self.inputs_eva)
-            # self.lstm_eva, self.controls, self.state, self.initial_state_eva, self.pred_depth = define_lstm(False, self.inputs_eva)
-            # import pdb; pdb.set_trace()
-          else:
-            if FLAGS.auxiliary_odom : raise IOError('Odometry cant be predicted when there is no n_fc')  
-            #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
+          # self.lstm_eva, self.controls, self.state, self.initial_state_eva, self.pred_depth = define_lstm(False, self.inputs_eva)
+          # import pdb; pdb.set_trace()
+        
+        else:
+          if FLAGS.auxiliary_odom : raise IOError('Odometry cant be predicted when there is no n_fc')  
+          #Define model with SLIM, second returned value are endpoints to get activations of certain nodes
+          with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(is_training=True, weight_decay=FLAGS.weight_decay,
+                           stddev=FLAGS.init_scale)):
             self.outputs, self.endpoints = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, 
               is_training=True, dropout_keep_prob=FLAGS.dropout_keep_prob, depth_multiplier=depth_multiplier)
             self.aux_depth = self.endpoints['aux_depth_reshaped']
+          with slim.arg_scope(mobile_net.mobilenet_v1_arg_scope(is_training=False, weight_decay=FLAGS.weight_decay,
+                           stddev=FLAGS.init_scale)):
             self.controls, _ = mobile_net.mobilenet_v1(self.inputs, num_classes=self.output_size, 
               is_training=False, reuse = True, depth_multiplier=depth_multiplier)
-	    self.pred_depth = _['aux_depth_reshaped']
-      
+            self.pred_depth = _['aux_depth_reshaped']
+
       elif FLAGS.network=='depth':
         with slim.arg_scope(depth_estim.arg_scope(weight_decay=FLAGS.weight_decay, stddev=FLAGS.init_scale)):
           # Define model with SLIM, second returned value are endpoints to get activations of certain nodes
@@ -306,14 +322,16 @@ class Model(object):
       def f_no_loss(): return tf.zeros((FLAGS.batch_size,self.output_size)), tf.zeros((FLAGS.batch_size,self.output_size))
       def f_loss(): return self.outputs, self.targets
       input1, input2 = tf.cond(tf.equal(self.targets[0,0], 999), f_no_loss, f_loss)
-      self.loss = tf.losses.mean_squared_error(input1, input2)
-
-      if FLAGS.auxiliary_depth:
-        # self.depth_targets = tf.placeholder(tf.float32, [None,1,1,64])
+      if not FLAGS.no_control and (not FLAGS.rl or FLAGS.auxiliary_ctr):
+        self.loss = tf.losses.mean_squared_error(input1, input2, weights=FLAGS.control_weight)
+      if FLAGS.freeze:
+        FLAGS.depth_weight=0
+        FLAGS.odom_weight=0
+      if FLAGS.rl or FLAGS.auxiliary_depth:
         self.depth_targets = tf.placeholder(tf.float32, [None,55,74])
-      if FLAGS.auxiliary_depth:
+        # self.depth_targets = tf.placeholder(tf.float32, [None,55,74,FLAGS.n_frames if FLAGS.n_fc else 1])
         weights = FLAGS.depth_weight*tf.cast(tf.greater(self.depth_targets, 0), tf.float32) # put loss weight on zero where depth is negative.        
-	if FLAGS.depth_loss == 'mean_squared':
+        if FLAGS.depth_loss == 'mean_squared':
           self.depth_loss = tf.losses.mean_squared_error(self.aux_depth,self.depth_targets,weights=weights)
         elif FLAGS.depth_loss == 'absolute_difference':
           self.depth_loss = tf.losses.absolute_difference(self.aux_depth,self.depth_targets,weights=weights)
@@ -322,7 +340,8 @@ class Model(object):
         else :
           raise 'Depth loss is unknown: {}'.format(FLAGS.depth_loss)
       if FLAGS.auxiliary_odom:
-        self.odom_targets = tf.placeholder(tf.float32, [None,4])
+        self.odom_targets = tf.placeholder(tf.float32, [None,6])
+        # self.odom_targets = tf.placeholder(tf.float32, [None,4])
         if FLAGS.odom_loss == 'absolute_difference':
           self.odom_loss = tf.losses.absolute_difference(self.aux_odom,self.odom_targets,weights=FLAGS.odom_weight)
         elif FLAGS.odom_loss == 'mean_squared':
@@ -344,10 +363,34 @@ class Model(object):
         self.optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr) 
       elif FLAGS.optimizer == 'gradientdescent':
         self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.lr) 
+      elif FLAGS.optimizer == 'rmsprop':
+        self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.lr) 
       else:
         raise IOError('Model: Unknown optimizer.')
+      # Create the train_op and scale the gradients by providing a map from variable
+      # name (or variable) to a scaling coefficient:
+      gradient_multipliers = {}
+      if FLAGS.grad_mul:        
+        mobile_variables = [v for v in tf.global_variables() if (v.name.find('Adadelta')==-1 and v.name.find('BatchNorm')==-1 and v.name.find('Adam')==-1  and v.name.find('aux_depth')==-1 and v.name.find('aux_odom')==-1  and v.name.find('control')==-1)]
+        for v in mobile_variables:
+          # print v.name
+          gradient_multipliers[v.name]=FLAGS.grad_mul_weight
+      
+      if FLAGS.no_batchnorm_learning:
+        batchnorm_variables = [v for v in tf.global_variables() if v.name.find('BatchNorm')!=-1]
+        for v in batchnorm_variables:
+          # print v.name
+          gradient_multipliers[v.name]=0
+      # if FLAGS.freeze:
+      #   global_variables = [v for v in tf.global_variables() if (v.name.find('Adadelta')==-1 and v.name.find('BatchNorm')==-1)]
+      #   control_variables = [v for v in global_variables if v.name.find('control')!=-1]   # changed logits to control
+      #   print('Only training control variables: ',[v.name for v in control_variables])      
+      #   self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, global_step=self.global_step, variables_to_train=control_variables, clip_gradient_norm=FLAGS.clip_grad)
+
+
+
       if not FLAGS.rl:
-        self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, global_step=self.global_step, clip_gradient_norm=FLAGS.clip_grad)
+        self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, global_step=self.global_step, gradient_multipliers=gradient_multipliers, clip_gradient_norm=FLAGS.clip_grad)
         # self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, global_step=self.global_step, gradient_multipliers=gradient_multipliers, clip_gradient_norm=FLAGS.clip_grad)
       else:
         grads_and_vars_output = self.optimizer.compute_gradients(self.outputs, tf.trainable_variables())
@@ -369,34 +412,25 @@ class Model(object):
           # Average over batch
           summed_cost=summed_cost+tf.matmul([costs[b]],normal_weights)[0]/FLAGS.batch_size
           # weighted_costs.append(tf.matmul(costs[b],normal_weights))
+        self.cost_to_go = summed_cost
         # grads_and_vars = [(weighted_costs[i]*gvt[0],gvt[1]) for i,gvt in enumerate(grads_and_vars)]
         grads_and_vars_output = [(summed_cost*gvt[0] if gvt[0]!=None else None,gvt[1]) for gvt in grads_and_vars_output ]
-        # grads_and_vars_loss = self.optimizer.compute_gradients(self.total_loss, tf.trainable_variables())
+        grads_and_vars_loss = self.optimizer.compute_gradients(self.total_loss, tf.trainable_variables())
         # TODO: assert that the tensors for which gradients are defined are the same !
-        # grads_and_vars = [(grads_and_vars_output[i][0]+grads_and_vars_loss[i][0] if grads_and_vars_output[i][0] != None and grads_and_vars_loss[i][0]!=None else None,
-        #   grads_and_vars_output[i][1]) for i in range(len(grads_and_vars_loss))]
-        grads_and_vars = grads_and_vars_output       
-        self.train_op = self.optimizer.apply_gradients(grads_and_vars)
-      # Create the train_op and scale the gradients by providing a map from variable
-      # name (or variable) to a scaling coefficient:
-      # if FLAGS.grad_mul:
-      #   gradient_multipliers = {
-      #     'InceptionV3/Logits/final_tanh/weights/read:0': 10,
-      #     'InceptionV3/Logits/final_tanh/biases/read:0': 10,
-      #   }      
-      # else:
-      #   gradient_multipliers = {}
-      # if FLAGS.freeze:
-      #   global_variables = [v for v in tf.global_variables() if (v.name.find('Adadelta')==-1 and v.name.find('BatchNorm')==-1)]
-      #   control_variables = [v for v in global_variables if v.name.find('control')!=-1]   # changed logits to control
-      #   print('Only training control variables: ',[v.name for v in control_variables])      
-      #   self.train_op = slim.learning.create_train_op(self.total_loss, self.optimizer, global_step=self.global_step, variables_to_train=control_variables, clip_gradient_norm=FLAGS.clip_grad)
-
+        grads_and_vars=[]
+        assert len(grads_and_vars_output) == len(grads_and_vars_loss), StandardError('gradient computations of trainable variables to output and loss are not the same!')
+        for i in range(len(grads_and_vars_output)):
+          assert grads_and_vars_output[i][1]==grads_and_vars_loss[i][1], StandardError('Gradients and variables of outputs and loss are not corresponding!')
+          grads_and_vars.append((grads_and_vars_output[i][0]+grads_and_vars_loss[i][0] if grads_and_vars_output[i][0] != None and grads_and_vars_loss[i][0]!=None else None,
+                    grads_and_vars_output[i][1]))
+        # grads_and_vars = grads_and_vars_output       
+        self.train_op = self.optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
+      
         
   def forward(self, inputs, states=[], auxdepth=False, auxodom=False, prev_action=[], targets=[], target_depth=[], target_odom=[]):
     '''run forward pass and return action prediction
     '''
-    tensors = [self.controls]
+    tensors = [] 
     if FLAGS.lstm:
       # if len(states)==0 : feed_dict={self.inputs_eva: inputs}
       if len(states)==0 : 
@@ -412,13 +446,16 @@ class Model(object):
       if len(prev_action)==0 and FLAGS.feed_previous_action: raise IOError('previous action was not provided to model.forward.') 
       tensors.append(self.pred_odom)
       feed_dict[self.prev_action] = prev_action
-    if len(targets) != 0 and not FLAGS.lstm: 
-      tensors.extend([self.total_loss, self.loss])
+    if not FLAGS.lstm:
+      tensors.append(self.total_loss)
+    if len(targets) != 0 and not FLAGS.lstm and not FLAGS.no_control and (not FLAGS.rl or FLAGS.auxiliary_ctr): 
+      tensors.append(self.loss)
       feed_dict[self.targets] = targets
-    if len(target_depth) != 0 and not FLAGS.lstm: 
-      tensors.append(self.depth_loss)
+    if len(target_depth) != 0 and not FLAGS.lstm:
+      if FLAGS.auxiliary_depth: tensors.append(self.depth_loss)
+      if FLAGS.rl: tensors.append(self.cost_to_go)
       feed_dict[self.depth_targets] = target_depth
-    if len(target_odom) != 0 and not FLAGS.lstm: 
+    if len(target_odom) != 0 and not FLAGS.lstm and FLAGS.auxiliary_odom: 
       if len(prev_action)==0 and FLAGS.feed_previous_action: raise IOError('previous action was not provided to model.forward.') 
       tensors.append(self.odom_loss)
       feed_dict[self.odom_targets] = target_odom
@@ -428,37 +465,38 @@ class Model(object):
     losses = {}
     aux_results = []
     state = []
-    control = results.pop(0)
+    # control = results.pop(0) if not FLAGS.no_control else [] 
     if FLAGS.lstm: 
       state = results.pop(0)
     if auxdepth: aux_results.append(results.pop(0))
     if auxodom: aux_results.append(results.pop(0))
-    if len(targets)!=0 and not FLAGS.lstm:
+    if not FLAGS.lstm:
       losses['t']=results.pop(0) # total loss
+    if len(targets) != 0 and not FLAGS.lstm and not FLAGS.no_control and (not FLAGS.rl or FLAGS.auxiliary_ctr):
       losses['c']=results.pop(0) # control loss
     if len(target_depth) != 0 and not FLAGS.lstm:
-      losses['d']=results.pop(0) # depth loss
-    if len(target_odom) != 0 and not FLAGS.lstm:
+      if FLAGS.auxiliary_depth: losses['d']=results.pop(0) # depth loss
+      if FLAGS.rl: losses['q']=results.pop(0)
+    if len(target_odom) != 0 and not FLAGS.lstm and FLAGS.auxiliary_odom:
       losses['o']=results.pop(0) # odometry loss
-    return control, state, losses, aux_results
+    return state, losses, aux_results
 
   def backward(self, inputs, initial_state=[], targets=[], depth_targets=[], odom_targets=[], prev_action=[]):
     '''run forward pass and return action prediction
     '''
-    # if not FLAGS.rl:
-    tensors = [self.outputs, self.train_op, self.total_loss, self.loss]
-    feed_dict = {self.inputs: inputs, self.targets: targets}
-    # else:
-    #   tensors = [self.outputs, self.train_op, self.total_loss, self.loss]
-    #   feed_dict = {self.inputs: inputs}
+    tensors = [self.train_op, self.total_loss]
+    feed_dict = {self.inputs: inputs}
+    if not FLAGS.no_control and (not FLAGS.rl or FLAGS.auxiliary_ctr):
+      tensors.append(self.loss)
+      feed_dict[self.targets]=targets
     if FLAGS.lstm:
       assert len(initial_state)!=0
       # print 'initial_state: ',initial_state.shape
       feed_dict[self.initial_state]=initial_state
     if (FLAGS.auxiliary_depth or FLAGS.rl) and len(depth_targets)!=0:
       feed_dict[self.depth_targets] = depth_targets
-      if FLAGS.auxiliary_depth:
-        tensors.append(self.depth_loss)
+    if FLAGS.auxiliary_depth: tensors.append(self.depth_loss)
+    if FLAGS.rl: tensors.append(self.cost_to_go)
     if FLAGS.auxiliary_odom and len(odom_targets)!=0:
       if FLAGS.feed_previous_action and len(prev_action)==0: 
         raise IOError('previous action was not provided to model.backward.') 
@@ -468,13 +506,15 @@ class Model(object):
     
     results = self.sess.run(tensors, feed_dict=feed_dict)
     
-    control = results.pop(0) # control always first
-    _ = results.pop(0) # and train_op second
-    losses = {'t':results.pop(0),'c':results.pop(0)} # rest is losses
+# control = results.pop(0) if not (FLAGS.no_control or FLAGS.rl) else [] # control always first
+    _ = results.pop(0) # train_op
+    losses = {'t':results.pop(0)} # total loss
+    if not FLAGS.no_control and (not FLAGS.rl or FLAGS.auxiliary_ctr): losses['c']=results.pop(0) # control loss
     if FLAGS.auxiliary_depth and len(depth_targets)!=0: losses['d']=results.pop(0)
+    if FLAGS.rl and len(depth_targets)!=0: losses['q']=results.pop(0)
     if FLAGS.auxiliary_odom and len(odom_targets)!=0: losses['o']=results.pop(0)
     
-    return control, losses
+    return losses
   
   def get_endpoint_activations(self, inputs):
     '''Run forward through the network for this batch and return all activations
@@ -482,7 +522,13 @@ class Model(object):
     '''
     tensors = [ self.endpoints[ep] for ep in self.endpoints]
     activations = self.sess.run(tensors, feed_dict={self.inputs:inputs})
+    # print(len(activations))
+    # print(len(self.endpoints))
     return [ a.reshape(-1,1) for a in activations]
+
+  # def get_weights(self):
+  #   '''
+  #   '''
 
   def fig2buf(self, fig):
     """
@@ -596,7 +642,7 @@ class Model(object):
     #self.saver.save(self.sess, logfolder+'/my-model')
 
   def add_summary_var(self, name):
-    var_name = tf.Variable(0.)
+    var_name = tf.Variable(0., name=name)
     self.summary_vars[name]=var_name
     self.summary_ops[name] = tf.summary.scalar(name, var_name)
     
@@ -604,18 +650,21 @@ class Model(object):
     self.summary_vars = {}
     self.summary_ops = {}
     #self.summary_vars = []
-    self.add_summary_var("loss_total_train")
-    self.add_summary_var("loss_control_train")
-    self.add_summary_var("loss_depth_train")
-    self.add_summary_var("loss_odom_train")
-    self.add_summary_var("loss_total_val")
-    self.add_summary_var("loss_control_val")
-    self.add_summary_var("loss_depth_val")
-    self.add_summary_var("loss_odom_val")
-    self.add_summary_var("loss_total_test")
-    self.add_summary_var("loss_control_test")
-    self.add_summary_var("loss_depth_test")
-    self.add_summary_var("loss_odom_test")
+    self.add_summary_var("loss_train_total")
+    self.add_summary_var("loss_train_control")
+    self.add_summary_var("loss_train_depth")
+    self.add_summary_var("loss_train_odom")
+    self.add_summary_var("loss_train_q")
+    self.add_summary_var("loss_val_total")
+    self.add_summary_var("loss_val_control")
+    self.add_summary_var("loss_val_depth")
+    self.add_summary_var("loss_val_odom")
+    self.add_summary_var("loss_val_q")
+    self.add_summary_var("loss_test_total")
+    self.add_summary_var("loss_test_control")
+    self.add_summary_var("loss_test_depth")
+    self.add_summary_var("loss_test_odom")
+    self.add_summary_var("loss_test_q")
     
     if FLAGS.plot_activations:
       name = "conv_activations"
